@@ -49,11 +49,23 @@ Implemented:
 
 Gate result (Stage 2 completion): **PASS — gate exit=0**
 
-## Stage 3 — External task synchronization
-- Mapping external task fields to board fields; import without auto-starting execution
-- External identifier preservation + deduplication (reuse existing `external_source`/`external_key` + unique index)
-- Bidirectional sync where supported; field ownership; conflict detection; safe retry
-- Task dependencies + blocked-state behavior
+## Stage 3 — External task synchronization — COMPLETE
+Commits on `development`:
+- `cd86f3c` Stage 3: add MCP external task synchronization engine and routes
+- `0b77380` Stage 3: add MCP sync UI and client API
+
+Implemented:
+- `mcp_sync_connections` table: links board tasks to external MCP tasks (external_source + external_key unique index, per-connection sync_direction, conflict_policy)
+- `sync_field_mappings` table: external_field → board_field mapping with transforms (identity, lowercase, uppercase, capitalize, trim)
+- `sync_conflicts` table: pending/resolved/ignored conflicts with external and board values
+- `sync_state` table: last sync timestamps and sync count per connection
+- Sync engine: sync() runs bidirectional import/export; importTask() creates board tasks without auto-starting execution (agentStatus stays 'idle'); exportTask() pushes board changes to external
+- Conflict handling: board_wins / external_wins / manual policies; manual mode creates pending conflicts for user resolution
+- API routes: GET/POST/DELETE /api/mcp/sync/connections, POST /sync, /import, /export, GET/POST/DELETE /mappings, GET /conflicts, POST /conflicts/:id/resolve, /:id/ignore, GET /state
+- UI: McpSyncConfig component — connection list, sync/import/export actions, field mapping editor, conflict resolution UI
+- Client API functions + types; routing at /mcp/sync; Header nav link
+
+Gate result (Stage 3 completion): PENDING — gate running
 
 ## Stage 4 — Multi-session Agent Execution
 - Agent/provider identity separate from execution-session identity
