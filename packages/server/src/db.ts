@@ -278,6 +278,56 @@ export function migrateSqliteDatabase(db: Database.Database): void {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_attachments_task_id ON task_attachments(task_id)`);
+
+  // ─── MCP server registry ───────────────────────────────────────────────────
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      transport       TEXT NOT NULL CHECK (transport IN ('stdio', 'streamable-http', 'sse')),
+      command         TEXT,
+      args            TEXT NOT NULL DEFAULT '[]',
+      url             TEXT,
+      env             TEXT NOT NULL DEFAULT '{}',
+      cwd             TEXT,
+      headers         TEXT NOT NULL DEFAULT '{}',
+      status          TEXT NOT NULL DEFAULT 'disconnected'
+                      CHECK (status IN ('disconnected', 'connecting', 'connected', 'error')),
+      last_connected_at BIGINT,
+      last_error      TEXT,
+      created_at      BIGINT NOT NULL,
+      updated_at      BIGINT NOT NULL
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_tools (
+      id              TEXT PRIMARY KEY,
+      server_id       TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      description     TEXT,
+      input_schema    TEXT NOT NULL DEFAULT '{}',
+      output_schema   TEXT DEFAULT NULL,
+      annotations     TEXT DEFAULT NULL,
+      discovered_at   BIGINT NOT NULL,
+      UNIQUE (server_id, name)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_tools_server ON mcp_tools(server_id)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_permissions (
+      id        TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      agent_type TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      allowed   INTEGER NOT NULL DEFAULT 0 CHECK (allowed IN (0, 1)),
+      UNIQUE (server_id, agent_type, tool_name)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_server ON mcp_permissions(server_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_agent ON mcp_permissions(agent_type)`);
 }
 
 function hasSqliteForeignKey(
@@ -708,6 +758,56 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_task_attachments_task_id ON task_attachments(task_id)`);
+
+  // ─── MCP server registry ───────────────────────────────────────────────────
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      transport       TEXT NOT NULL CHECK (transport IN ('stdio', 'streamable-http', 'sse')),
+      command         TEXT,
+      args            TEXT NOT NULL DEFAULT '[]',
+      url             TEXT,
+      env             TEXT NOT NULL DEFAULT '{}',
+      cwd             TEXT,
+      headers         TEXT NOT NULL DEFAULT '{}',
+      status          TEXT NOT NULL DEFAULT 'disconnected'
+                      CHECK (status IN ('disconnected', 'connecting', 'connected', 'error')),
+      last_connected_at BIGINT,
+      last_error      TEXT,
+      created_at      BIGINT NOT NULL,
+      updated_at      BIGINT NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mcp_tools (
+      id              TEXT PRIMARY KEY,
+      server_id       TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      description     TEXT,
+      input_schema    TEXT NOT NULL DEFAULT '{}',
+      output_schema   TEXT DEFAULT NULL,
+      annotations     TEXT DEFAULT NULL,
+      discovered_at   BIGINT NOT NULL,
+      UNIQUE (server_id, name)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_mcp_tools_server ON mcp_tools(server_id)`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mcp_permissions (
+      id        TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      agent_type TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      allowed   INTEGER NOT NULL DEFAULT 0 CHECK (allowed IN (0, 1)),
+      UNIQUE (server_id, agent_type, tool_name)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_server ON mcp_permissions(server_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_agent ON mcp_permissions(agent_type)`);
 
   // Migrate existing FK to ON DELETE CASCADE if not already set
   const { rows: fkRows } = await pool.query(`
