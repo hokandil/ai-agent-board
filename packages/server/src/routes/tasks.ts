@@ -287,6 +287,24 @@ export function createTaskRouter(repo: TaskRepository, agentManager: AgentManage
         res.status(400).json({ error: `Cannot move from ${task.columnId} to ${columnId}` });
         return;
       }
+
+      // Review gate: moving to review requires complete agent status
+      if (columnId === 'review' && task.agentStatus !== 'complete') {
+        res.status(400).json({ error: `Cannot move task ${task.id} to review: agent status must be 'complete' (current: ${task.agentStatus})` });
+        return;
+      }
+
+      // Review gate: moving to done requires complete agent status and approved review
+      if (columnId === 'done') {
+        if (task.agentStatus !== 'complete') {
+          res.status(400).json({ error: `Cannot move task ${task.id} to done: agent status must be 'complete' (current: ${task.agentStatus})` });
+          return;
+        }
+        if (task.reviewStatus !== 'approved') {
+          res.status(400).json({ error: `Cannot move task ${task.id} to done: review status must be 'approved' (current: ${task.reviewStatus ?? 'pending'})` });
+          return;
+        }
+      }
     }
 
     // Build updates from validated fields

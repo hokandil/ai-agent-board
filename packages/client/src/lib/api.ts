@@ -491,4 +491,21 @@ export function connectWS(onMessage: WSMessageHandler, onReconnect?: ReconnectHa
       ws = null;
     }
   };
+
+  // --- GitHub Sync ---
+  getGitHubIssues: (repoPath: string, limit?: number) =>
+    request<{ issues: any[] }>(`/api/github/tasks/${encodeURIComponent(repoPath)}/issues?limit=${limit ?? 10}`, { method: "GET" });
+
+  getGitHubPullRequests: (repoPath: string, limit?: number) =>
+    request<{ pullRequests: any[] }>(`/api/github/tasks/${encodeURIComponent(repoPath)}/pulls?limit=${limit ?? 10}`, { method: "GET" });
+
+  getGitHubCIRuns: (repoPath: string, limit?: number) =>
+    request<{ ciRuns: any[] }>(`/api/github/tasks/${encodeURIComponent(repoPath)}/ci?limit=${limit ?? 10}`, { method: "GET" });
+
+  getGitHubIssue: (repoPath: string, issueNumber: number) =>
+    request<any>(`/api/github/tasks/${encodeURIComponent(repoPath)}/issues/${issueNumber}`, { method: "GET" });
+
+  getGitHubPullRequest: (repoPath: string, prNumber: number) =>
+    request<any>(`/api/github/tasks/${encodeURIComponent(repoPath)}/pulls/${prNumber}`, { method: "GET" });
+
 }

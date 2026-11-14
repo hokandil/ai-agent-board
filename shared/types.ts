@@ -38,6 +38,9 @@ export interface Task {
   externalSource?: string;
   externalKey?: string;
   provenance?: TaskProvenance;
+  externalPRUrl?: string;
+  externalPRNumber?: number;
+  reviewStatus?: "pending" | "approved" | "changes_requested";
   /** Optional execution limit for this task. Omit to use the server default. */
   timeoutMinutes?: number | null;
 }
