@@ -127,14 +127,12 @@ const agentManager = new AgentManager();
   app.use('/api/templates', createTemplateRouter(templateRepo));
   app.use('/api/groups', createGroupsRouter(groupRepo, taskRepo, agentManager, projectRepo));
   app.use('/api', createAttachmentsRouter(taskRepo, attachmentStore));
-app.use('/api/mcp', createMcpRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager));
-app.use('/api/mcp/sync', createMcpSyncRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository & import('./repositories/mcp-sync-types.js').SyncRepository));
-
-app.use('/api/mcp/server', createMcpBoardServerRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager));
-app.use('/api/github', createGitHubRouter(taskRepo as TaskRepository));
-
-app.use('/api/sessions', createSessionRouter(taskRepo as TaskRepository, agentManager));
-app.use('/api/pty/sessions', createPtySessionRouter());
+  app.use('/api/mcp', createMcpRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager));
+  app.use('/api/mcp/sync', createMcpSyncRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository & import('./repositories/mcp-sync-types.js').SyncRepository));
+  app.use('/api/mcp/server', createMcpBoardServerRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager));
+  app.use('/api/github', createGitHubRouter(taskRepo as TaskRepository));
+  app.use('/api/sessions', createSessionRouter(taskRepo as TaskRepository, agentManager));
+  app.use('/api/pty/sessions', createPtySessionRouter());
 
   // GET /api/agents — list available agents
   app.get('/api/agents', (_req, res) => { res.json(agentManager.getAvailableAgents()); });
@@ -157,7 +155,6 @@ app.use('/api/pty/sessions', createPtySessionRouter());
   createWSS(server);
 
   await agentManager.initialize();
-
 
   // Recover orphaned task groups first — group children get group-aware
   // recovery (planning → idle for re-queue, executing → failed) before the

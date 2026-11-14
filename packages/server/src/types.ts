@@ -22,6 +22,7 @@ export type {
   AgentSession,
   CreateSessionRequest,
   SessionConcurrencyLimits,
+  AgentEventType,
 } from '../../../shared/types.js';
 
 export {
@@ -34,7 +35,7 @@ export {
   MIN_GROUP_CHILDREN,
 } from '../../../shared/constants.js';
 
-// ─── MCP types ───────────────────────────────────────────────────────────────
+// ── MCP types ───────────────────────────────────────────────────────────────
 
 export type MCPTransportType = 'stdio' | 'streamable-http' | 'sse';
 
