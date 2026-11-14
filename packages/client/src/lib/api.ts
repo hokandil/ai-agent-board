@@ -360,7 +360,36 @@ export const api = {
       body: JSON.stringify({ sessionId }),
     }),
 
+  // --- PTY Session Management ---
+  createPtySession: (data: {
+    cwd?: string;
+    cols?: number;
+    rows?: number;
+    env?: Record<string, string>;
+    name?: string;
+  }) =>
+    request<import('@/types').PtySession>('/api/pty/sessions', { method: 'POST', body: JSON.stringify(data) }),
+
+  getPtySessions: () =>
+    request<import('@/types').PtySession[]>('/api/pty/sessions'),
+
+  getPtySession: (id: string) =>
+    request<import('@/types').PtySession>(`/api/pty/sessions/${encodeURIComponent(id)}`),
+
+  sendPtyInput: (id: string, data: string) =>
+    request<{ sent: boolean }>(`/api/pty/sessions/${encodeURIComponent(id)}/input`, { method: 'POST', body: JSON.stringify({ data }) }),
+
+  resizePtySession: (id: string, cols: number, rows: number) =>
+    request<{ resized: boolean }>(`/api/pty/sessions/${encodeURIComponent(id)}/resize`, { method: 'POST', body: JSON.stringify({ cols, rows }) }),
+
+  killPtySession: (id: string, signal?: string) =>
+    request<{ killed: boolean }>(`/api/pty/sessions/${encodeURIComponent(id)}/kill`, { method: 'POST', body: JSON.stringify({ signal }) }),
+
+  deletePtySession: (id: string) =>
+    request<void>(`/api/pty/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
 };
+
 
 
 // --- WebSocket (shared singleton) ---

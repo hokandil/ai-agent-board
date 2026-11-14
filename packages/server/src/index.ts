@@ -16,6 +16,7 @@ import { createAttachmentsRouter } from './routes/attachments.js';
 import { createMcpRouter } from './routes/mcp.js';
 import { createMcpSyncRouter } from './routes/mcp-sync.js';
 import { createSessionRouter } from './routes/sessions.js';
+import { createPtySessionRouter } from './routes/pty-sessions.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createOrchestrationsRouter } from './routes/orchestrations.js';
 import type { AttachmentStore } from './repositories/attachment-types.js';
@@ -128,6 +129,7 @@ app.use('/api/mcp', createMcpRouter(taskRepo as TaskRepository & import('./repos
 app.use('/api/mcp/sync', createMcpSyncRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository & import('./repositories/mcp-sync-types.js').SyncRepository));
 
 app.use('/api/sessions', createSessionRouter(taskRepo as TaskRepository, agentManager));
+app.use('/api/pty/sessions', createPtySessionRouter());
 
   // GET /api/agents — list available agents
   app.get('/api/agents', (_req, res) => { res.json(agentManager.getAvailableAgents()); });

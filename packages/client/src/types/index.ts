@@ -178,4 +178,37 @@ export interface SessionConcurrencyLimits {
   global?: number;
 }
 
+// ─── PTY Session types ──────────────────────────────────────────────────────
+
+export type PtySessionStatus = 'idle' | 'running' | 'exited' | 'closed';
+
+export interface PtySession {
+  id: string;
+  pid: number;
+  cwd: string;
+  cols: number;
+  rows: number;
+  status: PtySessionStatus;
+  exitCode?: number;
+  createdAt: number;
+  exitedAt?: number;
+}
+
+export interface PtySessionOptions {
+  cwd?: string;
+  cols?: number;
+  rows?: number;
+  env?: Record<string, string>;
+  name?: string;
+}
+
+export interface PtySessionEvent {
+  type: 'data' | 'exit' | 'error';
+  data?: string;
+  exitCode?: number;
+  error?: string;
+}
+
+
+
 

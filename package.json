@@ -28,5 +28,8 @@
     "gate:required": "node scripts/run-contract-tests.cjs && node scripts/run-required-gate.cjs",
     "hooks:install": "node scripts/install-hooks.cjs",
     "postinstall": "node scripts/apply-agent-sdk-patches.cjs"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
   }
 }
