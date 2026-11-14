@@ -23,6 +23,7 @@ import type { TaskGroupWithChildren } from '@/lib/api';
 import { DeleteConfirmDialog } from '@/components/DeleteConfirmDialog';
 import { ProjectsPage } from '@/components/ProjectsPage';
 import type { ProjectDialogInitialValues } from '@/components/ProjectDialog';
+import { McpServerConfig } from '@/components/McpServerConfig';
 
 const STATUS_WEIGHT: Record<string, number> = { executing: 0, planning: 1, failed: 2, idle: 3, complete: 4 };
 
@@ -45,12 +46,14 @@ function BoardPage({
   theme,
   toggleTheme,
   onBackToProjects,
+  onNavigateMcp,
   initialTaskId,
 }: {
   project: Project;
   theme: 'dark' | 'light';
   toggleTheme: () => void;
   onBackToProjects: () => void;
+  onNavigateMcp: () => void;
   initialTaskId?: string;
 }) {
   const lockedRepoPath = project.repoPath;
@@ -395,6 +398,7 @@ function BoardPage({
         onClearFilters={handleClearFilters}
         onNewTask={handleOpenDialog}
         onNewGroup={handleOpenGroupDialog}
+        onNavigateMcp={onNavigateMcp}
       />
 
       <main className="flex-1 overflow-hidden">
@@ -481,7 +485,8 @@ function BoardPage({
 
 type RouteState =
   | { view: 'projects'; initialCreate?: ProjectDialogInitialValues }
-  | { view: 'board'; projectId?: string; taskId?: string };
+  | { view: 'board'; projectId?: string; taskId?: string }
+  | { view: 'mcp' };
 
 function parseCreateQuery(search: string): ProjectDialogInitialValues {
   const params = new URLSearchParams(search);
@@ -515,6 +520,7 @@ function parseCreateQuery(search: string): ProjectDialogInitialValues {
 
 function readRoute(): RouteState {
   const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/mcp') return { view: 'mcp' };
   if (path === '/projects/new') {
     return { view: 'projects', initialCreate: parseCreateQuery(window.location.search) };
   }
@@ -543,15 +549,15 @@ export function App() {
   } = useProjects();
   const [route, setRoute] = useState<RouteState>(() => readRoute());
 
+  const navigate = useCallback((path: string) => {
+    window.history.pushState(null, '', path);
+    setRoute(readRoute());
+  }, []);
+
   useEffect(() => {
     const onPopState = () => setRoute(readRoute());
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, []);
-
-  const navigate = useCallback((path: string) => {
-    window.history.pushState(null, '', path);
-    setRoute(readRoute());
   }, []);
 
   const openProject = useCallback((project: Project) => {
@@ -568,6 +574,12 @@ export function App() {
     if (route.projectId) return projects.find((project) => project.id === route.projectId);
     return defaultProject;
   }, [defaultProject, projects, route]);
+
+  if (route.view === 'mcp') {
+    return (
+      <McpServerConfig theme={theme} toggleTheme={toggleTheme} />
+    );
+  }
 
   if (route.view === 'projects' || (!loading && !selectedProject)) {
     return (
@@ -608,6 +620,7 @@ export function App() {
       theme={theme}
       toggleTheme={toggleTheme}
       onBackToProjects={() => navigate('/projects')}
+      onNavigateMcp={() => navigate('/mcp')}
       initialTaskId={route.view === 'board' ? route.taskId : undefined}
     />
   );
