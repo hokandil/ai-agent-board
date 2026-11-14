@@ -1,8 +1,7 @@
 import { Router, Request, Response } from 'express';
-import { execFileSync } from 'child_process';
 import type { TaskRepository } from '../repositories/types.js';
 import type { AgentManager } from '../services/agent-manager.js';
-import { asyncHandler, paramId, broadcastTaskUpdate } from './helpers.js';
+import { asyncHandler, paramId, broadcastTaskUpdate, gitExecFileSync } from './helpers.js';
 
 export function createGitRouter(repo: TaskRepository, agentManager: AgentManager): Router {
   const router = Router();
@@ -15,7 +14,7 @@ export function createGitRouter(repo: TaskRepository, agentManager: AgentManager
     if (!task.repoPath) { res.json({ hasRemote: false }); return; }
 
     try {
-      const remote = execFileSync('git', ['remote', 'get-url', 'origin'], {
+      const remote = gitExecFileSync(['remote', 'get-url', 'origin'], {
         cwd: task.repoPath, stdio: 'pipe',
       }).toString().trim();
       res.json({ hasRemote: !!remote });

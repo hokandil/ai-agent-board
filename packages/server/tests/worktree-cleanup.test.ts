@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+
+const isWindows = process.platform === 'win32';
 import type { Task } from '../src/types.js';
 import type { TaskRepository } from '../src/repositories/types.js';
 import {
@@ -15,17 +17,17 @@ import {
 } from '../src/services/worktree-cleanup.js';
 import type { WorktreeCleanupResult } from '../src/services/worktree-cleanup.js';
 
-// Removing a worktree requires proving that no process is using it. The
-// service can only prove that where the platform exposes a process table
-// (Linux /proc). On Windows and macOS the inspection returns 'unknown', and the
-// service must then fail closed: the worktree is retained, never deleted.
+// Removing a worktree requires proving that no process is using it. On Linux the
+// service inspects /proc; on Windows it enumerates process command lines via
+// PowerShell. Where process use cannot be verified (PowerShell unavailable, or
+// non-Linux/non-Windows platforms) the service fails closed: the worktree is
+// retained, never deleted.
 //
-// The assertions below therefore state each platform's real contract. On Linux
-// they require the worktree to be removed; on every other platform they require
-// the fail-closed refusal, the blocking reason, and that the worktree survives.
-// Neither branch weakens the safety assertions — the non-Linux branch is
-// strictly stricter about data retention.
-const canVerifyProcessUse = process.platform === 'linux';
+// The assertions below state each platform's real contract. On Linux and Windows
+// (clean fixture, no process references the worktree) the worktree is removed;
+// on other platforms it is fail-closed blocked and survives. Neither branch
+// weakens the safety assertions.
+const canVerifyProcessUse = process.platform === 'linux' || process.platform === 'win32';
 const PROCESS_USE_UNVERIFIED = /could not verify that no process is using the worktree/i;
 
 /** Assert the cleanup outcome the current platform must produce. */
@@ -275,9 +277,9 @@ test('startup reconciliation removes only clean unreferenced Board worktrees', a
   try {
     const report = await reconcileManagedWorktrees([], [clean.repoPath, dirty.repoPath], repo);
     if (canVerifyProcessUse) {
-      assert.deepEqual(report.removed, [clean.worktreePath]);
+      assert.ok(report.removed.some((p) => samePath(p, clean.worktreePath)), `expected removed to include ${clean.worktreePath}, got ${JSON.stringify(report.removed)}`);
       assert.equal(report.blocked.length, 1);
-      assert.equal(report.blocked[0]?.path, dirty.worktreePath);
+      assert.ok(samePath(report.blocked[0]?.path, dirty.worktreePath), `expected ${dirty.worktreePath}, got ${report.blocked[0]?.path}`);
       assertWorktreeRetained(clean.worktreePath, false);
     } else {
       assert.deepEqual(report.removed, []);
@@ -317,6 +319,23 @@ test('a worktree whose process usage cannot be verified keeps its persisted path
       assertWorktreeRetained(f.worktreePath, true);
     }
   } finally {
+    f.dispose();
+  }
+});
+
+test('Windows process-use inspection reports in-use when a process references the worktree', { skip: !isWindows }, async () => {
+  const f = fixture();
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20_000)', f.worktreePath], {
+    cwd: f.worktreePath,
+    stdio: 'ignore',
+  });
+  try {
+    // Give the child a moment to register in the process table.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const result = inspectWorktreeProcessUse(f.worktreePath, 'win32');
+    assert.equal(result, 'in-use');
+  } finally {
+    child.kill();
     f.dispose();
   }
 });

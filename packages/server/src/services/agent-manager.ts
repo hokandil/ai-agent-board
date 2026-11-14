@@ -18,6 +18,7 @@ import {
 import { UPLOADS_DIR } from '../routes/attachments.js';
 import type { AttachmentStore } from '../repositories/attachment-types.js';
 import { errorMessage } from '../utils.js';
+import { gitExecFileSync } from '../routes/helpers.js';
 import { detectAvailableAgents } from './agent-detection.js';
 import { resolveTaskTimeoutMs } from './agent-timeout.js';
 
@@ -312,7 +313,7 @@ export class AgentManager {
   // from a prior (e.g. failed) run instead of colliding on the branch.
   private worktreeRegisteredForBranch(repoPath: string, worktreePath: string, branchName: string): boolean {
     try {
-      const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      const out = gitExecFileSync(['worktree', 'list', '--porcelain'], {
         cwd: repoPath,
         stdio: 'pipe',
       }).toString();
@@ -353,7 +354,7 @@ export class AgentManager {
     // Clear stale worktree records (e.g. dirs deleted out from under git) so a
     // fresh add for this branch isn't blocked by a dangling registration.
     try {
-      execFileSync('git', ['worktree', 'prune'], { cwd: task.repoPath, stdio: 'pipe' });
+      gitExecFileSync(['worktree', 'prune'], { cwd: task.repoPath, stdio: 'pipe' });
     } catch {
       /* best effort */
     }
@@ -362,16 +363,16 @@ export class AgentManager {
     const baseBranch = task.baseBranch || 'main';
 
     try {
-      execFileSync(
-        'git', ['worktree', 'add', '-b', task.branchName, worktreePath, baseBranch],
+      gitExecFileSync(
+        ['worktree', 'add', '-b', task.branchName, worktreePath, baseBranch],
         { cwd: task.repoPath, stdio: 'pipe' },
       );
       console.log(`[worktree] created at ${worktreePath} from ${baseBranch}`);
       return worktreePath;
     } catch {
       try {
-        execFileSync(
-          'git', ['worktree', 'add', worktreePath, task.branchName],
+        gitExecFileSync(
+          ['worktree', 'add', worktreePath, task.branchName],
           { cwd: task.repoPath, stdio: 'pipe' },
         );
         console.log(`[worktree] attached existing branch ${task.branchName} at ${worktreePath}`);
@@ -409,7 +410,7 @@ export class AgentManager {
 
     // Check that a remote named 'origin' exists
     try {
-      const remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd, stdio: 'pipe' }).toString().trim();
+      const remoteUrl = gitExecFileSync(['remote', 'get-url', 'origin'], { cwd, stdio: 'pipe' }).toString().trim();
       if (!remoteUrl) throw new Error('empty');
     } catch {
       throw new Error(
@@ -420,7 +421,7 @@ export class AgentManager {
     }
 
     try {
-      execFileSync('git', ['push', '-u', 'origin', task.branchName], { cwd, stdio: 'pipe' });
+      gitExecFileSync(['push', '-u', 'origin', task.branchName], { cwd, stdio: 'pipe' });
       const prTitle = task.title.replace(/[<>]/g, '').slice(0, 200);
       const result = execFileSync(
         'gh',
@@ -463,12 +464,12 @@ export class AgentManager {
 
     return this.withRepoLock(repoPath, () => {
       try {
-        execFileSync('git', ['checkout', baseBranch], { cwd: repoPath, stdio: 'pipe' });
-        execFileSync('git', ['merge', branchName, '--no-edit'], { cwd: repoPath, stdio: 'pipe' });
+        gitExecFileSync(['checkout', baseBranch], { cwd: repoPath, stdio: 'pipe' });
+        gitExecFileSync(['merge', branchName, '--no-edit'], { cwd: repoPath, stdio: 'pipe' });
         console.log(`[merge] merged ${branchName} into ${baseBranch}`);
         return { merged: true as const, baseBranch };
       } catch (err: unknown) {
-        try { execFileSync('git', ['merge', '--abort'], { cwd: repoPath, stdio: 'pipe' }); } catch { /* already clean */ }
+        try { gitExecFileSync(['merge', '--abort'], { cwd: repoPath, stdio: 'pipe' }); } catch { /* already clean */ }
         const stderr = getErrorStderr(err);
         const msg = stderr || errorMessage(err);
         console.error(`[merge] failed:`, msg);
@@ -565,7 +566,7 @@ export class AgentManager {
           let dirtyHint = '';
           if (reused) {
             try {
-              const status = execFileSync('git', ['status', '--porcelain'], {
+              const status = gitExecFileSync(['status', '--porcelain'], {
                 cwd: worktreePath, stdio: 'pipe',
               }).toString().trim();
               dirtyHint = status ? '\nNote: worktree has uncommitted changes from a prior run.' : '';
