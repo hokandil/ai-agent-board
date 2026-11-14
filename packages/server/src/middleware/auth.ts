@@ -1,8 +1,8 @@
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 
-export type ServiceScope = 'projects:read' | 'agents:read' | 'orchestrations:create' | 'orchestrations:read' | 'orchestrations:message' | 'tasks:relationships' | 'mcp:read' | 'mcp:write' | 'mcp:connect';
-const ALL_SERVICE_SCOPES: ServiceScope[] = ['projects:read', 'agents:read', 'orchestrations:create', 'orchestrations:read', 'orchestrations:message', 'tasks:relationships', 'mcp:read', 'mcp:write', 'mcp:connect'];
+export type ServiceScope = 'projects:read' | 'agents:read' | 'orchestrations:create' | 'orchestrations:read' | 'orchestrations:message' | 'tasks:relationships' | 'mcp:read' | 'mcp:write' | 'mcp:connect' | 'mcp:board:read' | 'mcp:board:write' | 'mcp:board:execute' | 'mcp:board:approve';
+const ALL_SERVICE_SCOPES: ServiceScope[] = ['projects:read', 'agents:read', 'orchestrations:create', 'orchestrations:read', 'orchestrations:message', 'tasks:relationships', 'mcp:read', 'mcp:write', 'mcp:connect', 'mcp:board:read', 'mcp:board:write', 'mcp:board:execute', 'mcp:board:approve'];
 
 interface Credential { token?: string; sha256?: string; scopes: ServiceScope[] }
 
@@ -46,6 +46,10 @@ export function requiredScope(req: Request): ServiceScope | undefined {
     if (method === 'GET') return 'mcp:read';
     if (p === '/mcp/servers' || p === '/mcp/permissions') return 'mcp:write';
     if (/^\/mcp\/servers\/[^/]+\/connect$/.test(p) && method === 'POST') return 'mcp:connect';
+    if (p.startsWith('/mcp/server')) {
+      if (method === 'GET') return 'mcp:board:read';
+      if (method === 'POST') return 'mcp:board:write';
+    }
     return 'mcp:write';
   }
   return undefined; // service credentials are denied for all non-allowlisted mutations
