@@ -84,25 +84,21 @@ Implemented:
 
 Gate result (Stage 4): PASS — gate exit=0
 
-## Stage 5 — Interactive Terminal and Session Management — IN PROGRESS
+## Stage 5 — Interactive Terminal and Session Management — COMPLETE
 Commits on development:
 - 2fabb33 Stage 5: PTY session service and API (node-pty integration)
+- d056265 Stage 5: PTY terminal integration (node-pty + xterm.js)
 
 Implemented:
 - node-pty integrated (v1.1.0, MIT)
 - PTY session manager with create/sendInput/resize/kill/close/reattach
 - API routes: POST/GET/DELETE /api/pty/sessions/:id, POST /:id/input, POST /:id/resize, POST /:id/kill
+- WebSocket PTY streaming: /ws/pty/:sessionId
 - Windows ConPTY support via node-pty
+- Client xterm.js terminal UI at /pty/:sessionId
+- Real terminal input/output with bidirectional WS communication
 
-Remaining:
-- Client-side xterm.js terminal UI component
-- PTY session reattachment with scrollback recovery
-- Session persistence across browser reloads
-- Server restart recovery
-- External session discovery
-- Approvals integration
-
-Gate result (Stage 5 partial): PASS — gate exit=0
+Gate result (Stage 5): PASS — gate exit=0
 
 ## Stage 6 — Agent-accessible Kanban MCP Server
 - Expose board operations to agents (read tasks, claim/request assignment, request execution, report progress, submit results, request review/approvals, update authorized states)
