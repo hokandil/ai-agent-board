@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import type { Task, Priority, ColumnId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt, MCPTool } from '../types.js';
 import type { TaskRepository, ContinuationEligibility } from './types.js';
 import type { MCPServerRecord, MCPToolRecord, MCPPermissionRecord, MCPRepository } from './mcp-types.js';
+import type { SyncConnectionRecord, SyncFieldMapping, SyncConflict, SyncState, SyncRepository } from './mcp-sync-types.js';
 import { errorMessage } from '../utils.js';
 
 interface TaskRow {
@@ -75,7 +76,7 @@ function rowToAttempt(row: AttemptRow): ExecutionAttempt {
     status: row.status, createdAt: row.created_at };
 }
 
-export class SqliteTaskRepository implements TaskRepository, MCPRepository {
+export class SqliteTaskRepository implements TaskRepository, MCPRepository, SyncRepository {
   private db: Database.Database;
   private stmts: {
     getAll: Database.Statement;
@@ -593,5 +594,323 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository {
   async isToolAllowed(serverId: string, agentType: string, toolName: string): Promise<boolean> {
     const perm = await this.getPermission(serverId, agentType, toolName);
     return perm?.allowed ?? false;
+  }
+
+  // ─── MCP Sync repository ──────────────────────────────────────────────
+
+  async getAllConnections(): Promise<SyncConnectionRecord[]> {
+    const rows = this.db.prepare('SELECT * FROM mcp_sync_connections ORDER BY created_at ASC').all() as Array<{
+      id: string; server_id: string; task_id: string; external_source: string; external_key: string;
+      external_task_tool: string; status: string; last_sync_at: number | null; last_error: string | null;
+      sync_direction: string; conflict_policy: string; created_at: number; updated_at: number;
+    }>;
+    return rows.map(row => ({
+      id: row.id, serverId: row.server_id, taskId: row.task_id,
+      externalSource: row.external_source, externalKey: row.external_key,
+      externalTaskTool: row.external_task_tool,
+      status: row.status as SyncConnectionRecord['status'],
+      lastSyncAt: row.last_sync_at ?? undefined,
+      lastError: row.last_error ?? undefined,
+      syncDirection: row.sync_direction as SyncConnectionRecord['syncDirection'],
+      conflictPolicy: row.conflict_policy as SyncConnectionRecord['conflictPolicy'],
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    }));
+  }
+
+  async getConnectionById(id: string): Promise<SyncConnectionRecord | undefined> {
+    const row = this.db.prepare('SELECT * FROM mcp_sync_connections WHERE id = ?').get(id) as {
+      id: string; server_id: string; task_id: string; external_source: string; external_key: string;
+      external_task_tool: string; status: string; last_sync_at: number | null; last_error: string | null;
+      sync_direction: string; conflict_policy: string; created_at: number; updated_at: number;
+    } | undefined;
+    if (!row) return undefined;
+    return {
+      id: row.id, serverId: row.server_id, taskId: row.task_id,
+      externalSource: row.external_source, externalKey: row.external_key,
+      externalTaskTool: row.external_task_tool,
+      status: row.status as SyncConnectionRecord['status'],
+      lastSyncAt: row.last_sync_at ?? undefined,
+      lastError: row.last_error ?? undefined,
+      syncDirection: row.sync_direction as SyncConnectionRecord['syncDirection'],
+      conflictPolicy: row.conflict_policy as SyncConnectionRecord['conflictPolicy'],
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
+  }
+
+  async getConnectionByTaskId(taskId: string): Promise<SyncConnectionRecord | undefined> {
+    const row = this.db.prepare('SELECT * FROM mcp_sync_connections WHERE task_id = ?').get(taskId) as {
+      id: string; server_id: string; task_id: string; external_source: string; external_key: string;
+      external_task_tool: string; status: string; last_sync_at: number | null; last_error: string | null;
+      sync_direction: string; conflict_policy: string; created_at: number; updated_at: number;
+    } | undefined;
+    if (!row) return undefined;
+    return {
+      id: row.id, serverId: row.server_id, taskId: row.task_id,
+      externalSource: row.external_source, externalKey: row.external_key,
+      externalTaskTool: row.external_task_tool,
+      status: row.status as SyncConnectionRecord['status'],
+      lastSyncAt: row.last_sync_at ?? undefined,
+      lastError: row.last_error ?? undefined,
+      syncDirection: row.sync_direction as SyncConnectionRecord['syncDirection'],
+      conflictPolicy: row.conflict_policy as SyncConnectionRecord['conflictPolicy'],
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
+  }
+
+  async getConnectionByExternalIdentity(
+    externalSource: string,
+    externalKey: string,
+  ): Promise<SyncConnectionRecord | undefined> {
+    const row = this.db.prepare(
+      'SELECT * FROM mcp_sync_connections WHERE external_source = ? AND external_key = ?',
+    ).get(externalSource, externalKey) as {
+      id: string; server_id: string; task_id: string; external_source: string; external_key: string;
+      external_task_tool: string; status: string; last_sync_at: number | null; last_error: string | null;
+      sync_direction: string; conflict_policy: string; created_at: number; updated_at: number;
+    } | undefined;
+    if (!row) return undefined;
+    return {
+      id: row.id, serverId: row.server_id, taskId: row.task_id,
+      externalSource: row.external_source, externalKey: row.external_key,
+      externalTaskTool: row.external_task_tool,
+      status: row.status as SyncConnectionRecord['status'],
+      lastSyncAt: row.last_sync_at ?? undefined,
+      lastError: row.last_error ?? undefined,
+      syncDirection: row.sync_direction as SyncConnectionRecord['syncDirection'],
+      conflictPolicy: row.conflict_policy as SyncConnectionRecord['conflictPolicy'],
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
+  }
+
+  async createConnection(conn: Omit<SyncConnectionRecord, 'createdAt' | 'updatedAt'>): Promise<SyncConnectionRecord> {
+    const now = Date.now();
+    const record: SyncConnectionRecord = { ...conn, createdAt: now, updatedAt: now };
+    this.db.prepare(`
+      INSERT INTO mcp_sync_connections
+      (id, server_id, task_id, external_source, external_key, external_task_tool,
+       status, last_sync_at, last_error, sync_direction, conflict_policy, created_at, updated_at)
+      VALUES (@id,@serverId,@taskId,@externalSource,@externalKey,@externalTaskTool,
+       @status,@lastSyncAt,@lastError,@syncDirection,@conflictPolicy,@createdAt,@updatedAt)
+    `).run({
+      id: record.id, serverId: record.serverId, taskId: record.taskId,
+      externalSource: record.externalSource, externalKey: record.externalKey,
+      externalTaskTool: record.externalTaskTool,
+      status: record.status,
+      lastSyncAt: record.lastSyncAt ?? null,
+      lastError: record.lastError ?? null,
+      syncDirection: record.syncDirection,
+      conflictPolicy: record.conflictPolicy,
+      createdAt: record.createdAt, updatedAt: record.updatedAt,
+    });
+    return record;
+  }
+
+  async updateConnection(
+    id: string,
+    updates: Partial<SyncConnectionRecord>,
+  ): Promise<SyncConnectionRecord | undefined> {
+    const existing = await this.getConnectionById(id);
+    if (!existing) return undefined;
+    const now = Date.now();
+    const merged: SyncConnectionRecord = { ...existing, ...updates, updatedAt: now };
+    this.db.prepare(`
+      UPDATE mcp_sync_connections SET
+        server_id = @serverId, task_id = @taskId, external_source = @externalSource,
+        external_key = @externalKey, external_task_tool = @externalTaskTool,
+        status = @status, last_sync_at = @lastSyncAt, last_error = @lastError,
+        sync_direction = @syncDirection, conflict_policy = @conflictPolicy,
+        updated_at = @updatedAt
+      WHERE id = @id
+    `).run({
+      id: merged.id, serverId: merged.serverId, taskId: merged.taskId,
+      externalSource: merged.externalSource, externalKey: merged.externalKey,
+      externalTaskTool: merged.externalTaskTool,
+      status: merged.status,
+      lastSyncAt: merged.lastSyncAt ?? null,
+      lastError: merged.lastError ?? null,
+      syncDirection: merged.syncDirection,
+      conflictPolicy: merged.conflictPolicy,
+      createdAt: merged.createdAt, updatedAt: merged.updatedAt,
+    });
+    return merged;
+  }
+
+  async deleteConnection(id: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM mcp_sync_connections WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  async getFieldMappingsByConnection(connectionId: string): Promise<SyncFieldMapping[]> {
+    const rows = this.db.prepare(
+      'SELECT * FROM sync_field_mappings WHERE connection_id = ? ORDER BY external_field ASC',
+    ).all(connectionId) as Array<{
+      id: string; connection_id: string; external_field: string; board_field: string;
+      transform: string; default_value: string | null;
+    }>;
+    return rows.map(row => ({
+      id: row.id, connectionId: row.connection_id, externalField: row.external_field,
+      boardField: row.board_field,
+      transform: row.transform as SyncFieldMapping['transform'],
+      defaultValue: row.default_value ?? undefined,
+    }));
+  }
+
+  async upsertFieldMapping(
+    connectionId: string,
+    externalField: string,
+    boardField: string,
+    transform: SyncFieldMapping['transform'],
+    defaultValue?: string,
+  ): Promise<SyncFieldMapping> {
+    const existing = (this.db.prepare(
+      'SELECT * FROM sync_field_mappings WHERE connection_id = ? AND external_field = ?',
+    ).get(connectionId, externalField) as {
+      id: string; connection_id: string; external_field: string; board_field: string;
+      transform: string; default_value: string | null;
+    } | undefined);
+    if (existing) {
+      this.db.prepare(
+        'UPDATE sync_field_mappings SET board_field = ?, transform = ?, default_value = ? WHERE id = ?',
+      ).run(boardField, transform, defaultValue ?? null, existing.id);
+      return {
+        id: existing.id, connectionId: existing.connection_id,
+        externalField: existing.external_field, boardField,
+        transform, defaultValue: existing.default_value ?? undefined,
+      };
+    }
+    const id = `sync-map:${connectionId}:${externalField}`;
+    this.db.prepare(
+      'INSERT INTO sync_field_mappings (id, connection_id, external_field, board_field, transform, default_value) VALUES (?,?,?,?,?,?)',
+    ).run(id, connectionId, externalField, boardField, transform, defaultValue ?? null);
+    return { id, connectionId, externalField, boardField, transform, defaultValue };
+  }
+
+  async deleteFieldMapping(id: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM sync_field_mappings WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  async getConflictsByConnection(connectionId: string): Promise<SyncConflict[]> {
+    const rows = this.db.prepare(
+      'SELECT * FROM sync_conflicts WHERE connection_id = ? ORDER BY created_at DESC',
+    ).all(connectionId) as Array<{
+      id: string; connection_id: string; external_field: string; board_field: string;
+      external_value: string | null; board_value: string | null; resolved_value: string | null;
+      resolved_at: number | null; resolved_by: string | null; status: string;
+      created_at: number; updated_at: number;
+    }>;
+    return rows.map(row => ({
+      id: row.id, connectionId: row.connection_id, externalField: row.external_field,
+      boardField: row.board_field,
+      externalValue: row.external_value ?? undefined,
+      boardValue: row.board_value ?? undefined,
+      resolvedValue: row.resolved_value ?? undefined,
+      resolvedAt: row.resolved_at ?? undefined,
+      resolvedBy: row.resolved_by ?? undefined,
+      status: row.status as SyncConflict['status'],
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    }));
+  }
+
+  async createConflict(conflict: Omit<SyncConflict, 'id' | 'createdAt' | 'updatedAt'>): Promise<SyncConflict> {
+    const now = Date.now();
+    const id = `sync-conflict:${now}-${Math.random().toString(36).slice(2)}`;
+    const record: SyncConflict = { ...conflict, id, createdAt: now, updatedAt: now };
+    this.db.prepare(`
+      INSERT INTO sync_conflicts
+      (id, connection_id, external_field, board_field, external_value, board_value,
+       resolved_value, resolved_at, resolved_by, status, created_at, updated_at)
+      VALUES (@id,@connectionId,@externalField,@boardField,@externalValue,@boardValue,
+       @resolvedValue,@resolvedAt,@resolvedBy,@status,@createdAt,@updatedAt)
+    `).run({
+      id: record.id, connectionId: record.connectionId, externalField: record.externalField,
+      boardField: record.boardField,
+      externalValue: record.externalValue ?? null,
+      boardValue: record.boardValue ?? null,
+      resolvedValue: record.resolvedValue ?? null,
+      resolvedAt: record.resolvedAt ?? null,
+      resolvedBy: record.resolvedBy ?? null,
+      status: record.status,
+      createdAt: record.createdAt, updatedAt: record.updatedAt,
+    });
+    return record;
+  }
+
+  async resolveConflict(id: string, resolvedValue: string, resolvedBy: string): Promise<SyncConflict | undefined> {
+    const now = Date.now();
+    const result = this.db.prepare(`
+      UPDATE sync_conflicts SET resolved_value = ?, resolved_at = ?, resolved_by = ?,
+       status = 'resolved', updated_at = ? WHERE id = ?
+    `).run(resolvedValue, now, resolvedBy, now, id);
+    if (!result.changes) return undefined;
+    const row = this.db.prepare('SELECT * FROM sync_conflicts WHERE id = ?').get(id) as {
+      id: string; connection_id: string; external_field: string; board_field: string;
+      external_value: string | null; board_value: string | null; resolved_value: string | null;
+      resolved_at: number | null; resolved_by: string | null; status: string;
+      created_at: number; updated_at: number;
+    } | undefined;
+    if (!row) return undefined;
+    return {
+      id: row.id, connectionId: row.connection_id, externalField: row.external_field,
+      boardField: row.board_field,
+      externalValue: row.external_value ?? undefined,
+      boardValue: row.board_value ?? undefined,
+      resolvedValue: row.resolved_value ?? undefined,
+      resolvedAt: row.resolved_at ?? undefined,
+      resolvedBy: row.resolved_by ?? undefined,
+      status: row.status as SyncConflict['status'],
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
+  }
+
+  async ignoreConflict(id: string): Promise<boolean> {
+    const now = Date.now();
+    const result = this.db.prepare(
+      'UPDATE sync_conflicts SET status = ?, updated_at = ? WHERE id = ?',
+    ).run('ignored', now, id);
+    return result.changes > 0;
+  }
+
+  async getSyncState(connectionId: string): Promise<SyncState | undefined> {
+    const row = this.db.prepare('SELECT * FROM sync_state WHERE connection_id = ?').get(connectionId) as {
+      id: string; connection_id: string; last_external_synced_at: number | null;
+      last_board_synced_at: number | null; sync_count: number; updated_at: number;
+    } | undefined;
+    if (!row) return undefined;
+    return {
+      id: row.id, connectionId: row.connection_id,
+      lastExternalSyncedAt: row.last_external_synced_at ?? undefined,
+      lastBoardSyncedAt: row.last_board_synced_at ?? undefined,
+      syncCount: row.sync_count, updatedAt: row.updated_at,
+    };
+  }
+
+  async upsertSyncState(connectionId: string, state: Partial<SyncState>): Promise<SyncState> {
+    const existing = await this.getSyncState(connectionId);
+    const now = Date.now();
+    if (existing) {
+      const merged: SyncState = { ...existing, ...state, updatedAt: now };
+      this.db.prepare(
+        'UPDATE sync_state SET last_external_synced_at = ?, last_board_synced_at = ?, sync_count = ?, updated_at = ? WHERE connection_id = ?',
+      ).run(
+        merged.lastExternalSyncedAt ?? null, merged.lastBoardSyncedAt ?? null,
+        merged.syncCount, merged.updatedAt, connectionId,
+      );
+      return merged;
+    }
+    const id = `sync-state:${connectionId}`;
+    const record: SyncState = {
+      id, connectionId,
+      lastExternalSyncedAt: state.lastExternalSyncedAt,
+      lastBoardSyncedAt: state.lastBoardSyncedAt,
+      syncCount: state.syncCount ?? 0, updatedAt: now,
+    };
+    this.db.prepare(
+      'INSERT INTO sync_state (id, connection_id, last_external_synced_at, last_board_synced_at, sync_count, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run(
+      record.id, record.connectionId, record.lastExternalSyncedAt ?? null,
+      record.lastBoardSyncedAt ?? null, record.syncCount, record.updatedAt,
+    );
+    return record;
   }
 }
