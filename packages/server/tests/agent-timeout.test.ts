@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { defaultAgentTimeoutMs, resolveTaskTimeoutMs } from '../src/services/agent-timeout.js';
 import { buildTask, validateTaskFields } from '../src/routes/helpers.js';
@@ -18,8 +21,14 @@ test('uses a persisted per-task timeout override', () => {
   assert.equal(resolveTaskTimeoutMs({ timeoutMinutes: 90 }), 90 * 60 * 1000);
 });
 
-test('validates timeout bounds and preserves the accepted value', () => {
-  const valid = { title: 'Review', repoPath: '/tmp/repo', timeoutMinutes: 120 };
+test('validates timeout bounds and preserves the accepted value', (t) => {
+  // repoPath must be an absolute path under an allowed repo root. A temporary
+  // directory is used instead of a POSIX-only literal so the same assertion
+  // holds on Windows; the default allowed roots include the system temp dir.
+  const repoPath = mkdtempSync(path.join(os.tmpdir(), 'agentboard-timeout-repo-'));
+  t.after(() => rmSync(repoPath, { recursive: true, force: true }));
+
+  const valid = { title: 'Review', repoPath, timeoutMinutes: 120 };
   assert.equal(validateTaskFields(valid), null);
   assert.equal(buildTask(valid).timeoutMinutes, 120);
   assert.match(validateTaskFields({ ...valid, timeoutMinutes: 0 }) || '', /between 1 and 240/);
