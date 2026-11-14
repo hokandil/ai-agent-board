@@ -291,9 +291,57 @@ export function validateRepoPath(repoPath: string): RepoPathValidation {
   };
 }
 
+/** A resolved command plus the arguments that must precede the git sub-command. */
+export interface GitSpawnTarget {
+  file: string;
+  prefixArgs: string[];
+}
+
+/**
+ * Locate the Windows command processor by absolute path. PATH resolution is not
+ * enough here: the cmd.exe fallback exists for the case where PATH contains
+ * only a .cmd shim directory, and System32 is usually absent from that PATH.
+ */
+function windowsCommandProcessor(env: NodeJS.ProcessEnv): string {
+  const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows';
+  const candidate = path.join(systemRoot, 'System32', 'cmd.exe');
+  try {
+    if (fs.statSync(candidate).isFile()) return candidate;
+  } catch {
+    // System32 is not where we expected — fall back to PATH resolution.
+  }
+  return 'cmd.exe';
+}
+
+/**
+ * Resolve a git invocation that child_process can actually spawn. On Windows,
+ * execFile cannot run .cmd/.bat shims (npm/nvm-style installs), so prefer a real
+ * git.exe found on PATH; if only a shim exists, run git through cmd.exe, which can.
+ */
+export function gitSpawnTarget(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): GitSpawnTarget {
+  if (platform === 'win32') {
+    const pathValue = env.PATH ?? env.Path ?? '';
+    for (const entry of pathValue.split(path.delimiter)) {
+      if (!entry.trim()) continue;
+      const candidate = path.join(entry.trim(), 'git.exe');
+      try {
+        if (fs.statSync(candidate).isFile()) return { file: candidate, prefixArgs: [] };
+      } catch {
+        // not in this PATH entry — keep looking
+      }
+    }
+    return { file: windowsCommandProcessor(env), prefixArgs: ['/d', '/c', 'git'] };
+  }
+  return { file: 'git', prefixArgs: [] };
+}
+
 export function isGitWorkTree(repoPath: string): boolean {
   try {
-    return execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: repoPath, stdio: 'pipe' })
+    const { file, prefixArgs } = gitSpawnTarget();
+    return execFileSync(file, [...prefixArgs, 'rev-parse', '--is-inside-work-tree'], { cwd: repoPath, stdio: 'pipe', windowsHide: true })
       .toString()
       .trim() === 'true';
   } catch {
