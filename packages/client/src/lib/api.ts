@@ -25,6 +25,7 @@ import type {
   SyncConflict,
   SyncState,
   SyncResult,
+  AgentSession,
 } from '@/types';
 
 export interface TaskGroupWithChildren extends TaskGroup {
@@ -322,6 +323,42 @@ export const api = {
 
   getSyncState: (connectionId: string) =>
     request<SyncState>(`/mcp/sync/connections/${encodeURIComponent(connectionId)}/state`),
+
+  // --- Session Management ---
+  createSession: (data: {
+    agentType: AgentType;
+    taskId?: string;
+    model?: string;
+    useWorktree?: boolean;
+    repoPath?: string;
+    branchName?: string;
+    baseBranch?: string;
+  }) =>
+    request<AgentSession>('/api/sessions', { method: 'POST', body: JSON.stringify(data) }),
+
+  startSession: (id: string) =>
+    request<AgentSession>(`/api/sessions/${encodeURIComponent(id)}/start`, { method: 'POST' }),
+
+  stopSession: (id: string) =>
+    request<{ stopped: boolean }>(`/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
+
+  resumeSession: (id: string) =>
+    request<AgentSession>(`/api/sessions/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
+
+  getSessions: () =>
+    request<AgentSession[]>('/api/sessions'),
+
+  getSession: (id: string) =>
+    request<AgentSession>(`/api/sessions/${encodeURIComponent(id)}`),
+
+  getSessionEvents: (sessionId: string) =>
+    request<AgentEvent[]>(`/api/sessions/${encodeURIComponent(sessionId)}/events`),
+
+  assignSessionToTask: (taskId: string, sessionId: string) =>
+    request<Task>(`/api/tasks/${encodeURIComponent(taskId)}/assign-session`, {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    }),
 
 };
 
