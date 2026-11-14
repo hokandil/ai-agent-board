@@ -13,6 +13,7 @@ import { createGitRouter } from './routes/git.js';
 import { createTemplateRouter } from './routes/templates.js';
 import { createGroupsRouter } from './routes/groups.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
+import { createMcpRouter } from './routes/mcp.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createOrchestrationsRouter } from './routes/orchestrations.js';
 import type { AttachmentStore } from './repositories/attachment-types.js';
@@ -121,6 +122,7 @@ const agentManager = new AgentManager();
   app.use('/api/templates', createTemplateRouter(templateRepo));
   app.use('/api/groups', createGroupsRouter(groupRepo, taskRepo, agentManager, projectRepo));
   app.use('/api', createAttachmentsRouter(taskRepo, attachmentStore));
+app.use('/api/mcp', createMcpRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager));
 
   // GET /api/agents — list available agents
   app.get('/api/agents', (_req, res) => { res.json(agentManager.getAvailableAgents()); });
