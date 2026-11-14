@@ -143,6 +143,9 @@ vite.config.ts.timestamp-*
 # Database and uploads
 data/
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 uploads/
 packages/e2e/test-results/
 packages/e2e/playwright-report/
@@ -153,6 +156,8 @@ agent-sdk-core/
 
 test-results/
 packages/e2e/test-results-old/
+# Temporary probe scripts (local diagnostics; never commit)
+probe*.ts
 # Squad: ignore runtime state (logs, inbox, sessions)
 .squad/orchestration-log/
 .squad/log/
