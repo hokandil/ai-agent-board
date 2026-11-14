@@ -15,6 +15,7 @@ import { createGroupsRouter } from './routes/groups.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
 import { createMcpRouter } from './routes/mcp.js';
 import { createMcpSyncRouter } from './routes/mcp-sync.js';
+import { createSessionRouter } from './routes/sessions.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createOrchestrationsRouter } from './routes/orchestrations.js';
 import type { AttachmentStore } from './repositories/attachment-types.js';
@@ -125,6 +126,8 @@ const agentManager = new AgentManager();
   app.use('/api', createAttachmentsRouter(taskRepo, attachmentStore));
 app.use('/api/mcp', createMcpRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager));
 app.use('/api/mcp/sync', createMcpSyncRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository & import('./repositories/mcp-sync-types.js').SyncRepository));
+
+app.use('/api/sessions', createSessionRouter(taskRepo as TaskRepository, agentManager));
 
   // GET /api/agents — list available agents
   app.get('/api/agents', (_req, res) => { res.json(agentManager.getAvailableAgents()); });

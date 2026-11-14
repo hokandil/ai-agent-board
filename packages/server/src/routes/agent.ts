@@ -236,6 +236,6 @@ export function createAgentRouter(
     }
     res.json(events);
   }));
-
   return router;
 }
+
