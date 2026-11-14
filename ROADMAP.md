@@ -67,12 +67,24 @@ Implemented:
 
 Gate result (Stage 3 completion): PENDING — gate running
 
-## Stage 4 — Multi-session Agent Execution
-- Agent/provider identity separate from execution-session identity
-- Multiple concurrent sessions per provider; configurable concurrency limits
-- Independent task assignment/start/stop/resume; per-session model selection
-- Worktree isolation; real-time monitoring; execution history; crash recovery
-- Prioritize working OpenCode multi-session path first
+## Stage 4 — Multi-session Agent Execution — COMPLETE
+Commits on development:
+- fe2899e Stage 4: session management API, routes, and UI components
+- 3c51926 Stage 4: multi-session agent execution core
+
+Implemented:
+- Agent/provider identity separated from execution-session identity (SessionManager class)
+- Multiple concurrent sessions per provider; per-session task assignment
+- Session lifecycle: create, start, stop, resume; per-session model, worktree, status
+- Worktree isolation per session
+- Concurrency limits: global, per-provider, per-project
+- Session APIs: POST/GET/DELETE /api/sessions/:id, GET /api/sessions
+- UI: SessionManager component at /sessions — session list, start/stop, event stream
+- Client API functions for session CRUD
+
+Gate result (Stage 4): PASS — gate exit=0
+
+## Stage 5 — Interactive Terminal and Session Management
 
 ## Stage 5 — Interactive Terminal and Session Management
 - node-pty + xterm.js UI; real terminal input/output
