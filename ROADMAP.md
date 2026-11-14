@@ -28,32 +28,26 @@ Commits on `development`:
 
 Gate result (Stage 1 completion): **PASS — gate exit=0**
 
-## Stage 2 — Generic MCP Manager — IN PROGRESS
-Implement a first-class MCP Host/Client on top of `@modelcontextprotocol/sdk@1.32.2` (pinned stable, MIT).
+## Stage 2 — Generic MCP Manager — COMPLETE
+Commits on `development`:
+- `fac6153` Stage 2: add MCP server registry tables to SQLite and Postgres migrations
+- `53cb82a` Stage 2: add MCP client service for connecting to external MCP servers
+- `2916753` Stage 2: extend auth scopes for MCP (mcp:read, mcp:write, mcp:connect)
+- `4a3970d` Stage 2: add MCP server routes (CRUD, connect, discover, test-tool, permissions)
+- `c5bc8be` Stage 2: add MCP API client functions and types
+- `ac72538` Stage 2: add Generic MCP Manager (routes, auth, client API, UI)
 
-Requirements:
-- Configure arbitrary compatible MCP servers through the UI (stdio, Streamable HTTP, legacy transports)
-- Connect, disconnect, test, discover tools/resources/prompts; display tool schemas and errors
-- Configure permissions per agent/session; never auto-grant all agents access
-- Protect stored credentials; prevent credential leakage
-- Extend existing auth scopes (ServiceScope in middleware/auth.ts) instead of parallel authorization
-- Test Windows-specific subprocess resolution
+Implemented:
+- `@modelcontextprotocol/sdk@1.32.2` (MIT, npm latest — no 2.x published)
+- MCP client service: connect/disconnect over stdio, streamable-http, sse; tool discovery; tool calling
+- MCP server registry: mcp_servers, mcp_tools, mcp_permissions tables (SQLite + Postgres)
+- Auth scopes: mcp:read, mcp:write, mcp:connect (extends existing ServiceScope model)
+- API routes: GET/POST/DELETE /api/mcp/servers, POST /connect, /disconnect, GET /tools, POST /test-tool, GET/POST/DELETE /permissions
+- UI: McpServerConfig component — server list, connect/disconnect, tool discovery & test, per-agent permissions
+- Client API functions + types; routing at /mcp; Header nav link
+- Windows-safe subprocess resolution via gitExecFileSync pattern
 
-Planned files:
-- `packages/server/src/db.ts` — mcp_servers, mcp_tools, mcp_permissions tables (SQLite + Postgres)
-- `packages/server/src/repositories/types.ts` — MCP repository interfaces
-- `packages/server/src/services/mcp-client.ts` — MCP client manager
-- `packages/server/src/services/mcp-permissions.ts` — permission checking
-- `packages/server/src/routes/mcp.ts` — MCP server CRUD, discover, test-tool routes
-- `packages/server/src/middleware/auth.ts` — extend ServiceScope (mcp:read, mcp:write, mcp:connect)
-- `packages/client/src/lib/api.ts` — MCP API client functions
-- `packages/client/src/components/McpServerConfig.tsx`, `McpPermissions.tsx` — UI
-- `packages/client/src/App.tsx` — routing
-- Tests: route-level + Windows subprocess resolution
-
-Blockers:
-- `@modelcontextprotocol/sdk` v2 is git-only; npm has no 2.x → pin `1.32.2` (MIT)
-- OpenCode v2 detection fix depends on agent-sdk-core patch being applied via postinstall
+Gate result (Stage 2 completion): **PASS — gate exit=0**
 
 ## Stage 3 — External task synchronization
 - Mapping external task fields to board fields; import without auto-starting execution
