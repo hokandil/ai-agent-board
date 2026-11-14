@@ -3,6 +3,7 @@ import type { Server } from 'http';
 import type { WSMessage } from './types.js';
 import { isValidToken } from './middleware/auth.js';
 import { isAllowedWebSocketRequest, parseList } from './network-policy.js';
+import { ptySessionManager } from './services/pty-session.js';
 
 interface AliveWebSocket extends WebSocket {
   isAlive: boolean;
@@ -30,8 +31,30 @@ export function createWSS(server: Server): WebSocketServer {
       }
 
       const url = new URL(req.url, `http://${req.headers.host}`);
-      const token = url.searchParams.get('token') ?? undefined;
 
+      // PTY session WebSocket: /ws/pty/:sessionId
+      if (url.pathname.startsWith('/ws/pty/')) {
+        const sessionId = url.pathname.split('/').pop();
+        if (!sessionId) {
+          socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+        if (!ptySessionManager.hasSession(sessionId)) {
+          socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+
+        // PTY sessions don't require auth token — they're ephemeral
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          setupPtySocket(ws, sessionId);
+        });
+        return;
+      }
+
+      // Regular WebSocket connection requires auth token
+      const token = url.searchParams.get('token') ?? undefined;
       if (!isValidToken(token)) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
@@ -66,6 +89,44 @@ export function createWSS(server: Server): WebSocketServer {
   wss.on('close', () => clearInterval(interval));
 
   return wss;
+}
+
+/** Handle PTY session WebSocket connection. */
+function setupPtySocket(ws: WebSocket, sessionId: string): void {
+  const pty = ptySessionManager.getSessionInfo(sessionId);
+  if (!pty) {
+    ws.close(1011, 'Session not found');
+    return;
+  }
+
+  // Forward client input to PTY
+  ws.on('message', (data: string | Buffer) => {
+    const text = data instanceof Buffer ? data.toString('utf8') : String(data);
+    ptySessionManager.sendInput(sessionId, text);
+  });
+
+  // Forward PTY output to client
+  const unsubscribe = ptySessionManager.subscribe(sessionId, (event) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      if (event.type === 'data' && event.data) {
+        ws.send(event.data);
+      } else if (event.type === 'exit') {
+        ws.send(JSON.stringify({ type: 'exit', exitCode: event.exitCode }));
+        ws.close(1000, 'Session exited');
+      } else if (event.type === 'error') {
+        ws.send(JSON.stringify({ type: 'error', error: event.error }));
+        ws.close(1011, 'Session error');
+      }
+    }
+  });
+
+  ws.on('close', () => {
+    unsubscribe();
+  });
+
+  ws.on('error', () => {
+    unsubscribe();
+  });
 }
 
 export function broadcast(message: WSMessage): void {

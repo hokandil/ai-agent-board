@@ -55,11 +55,9 @@ export class PtySessionManager {
     return this.sessionInfo.get(id);
   }
 
-  /** Check if a session exists and is running. */
-  isRunning(id: string): boolean {
-    const pty = this.sessions.get(id);
-    if (!pty || this.closedSessions.has(id)) return false;
-    return true;
+  /** Check if a session exists (regardless of running state). */
+  hasSession(id: string): boolean {
+    return this.sessions.has(id) && !this.closedSessions.has(id);
   }
 
   /**
