@@ -13,6 +13,11 @@ import type {
   UpdateProjectRequest,
   ProjectPathValidation,
   ProjectConfig,
+  MCPServer,
+  MCPTool,
+  MCPTransportType,
+  MCPToolCallResult,
+  MCPPermission,
 } from '@/types';
 
 export interface TaskGroupWithChildren extends TaskGroup {
@@ -194,7 +199,69 @@ export const api = {
   stopGroup: (id: string) =>
     request<{ stopped: boolean }>(`/groups/${id}/stop`, { method: 'POST' }),
 
+  // --- MCP ---
+  getMcpServers: () =>
+    request<MCPServer[]>('/mcp/servers'),
+
+  getMcpServer: (id: string) =>
+    request<MCPServer>(`/mcp/servers/${encodeURIComponent(id)}`),
+
+  createMcpServer: (data: {
+    name: string;
+    transport: MCPTransportType;
+    command?: string;
+    args?: string[];
+    url?: string;
+    env?: Record<string, string>;
+    cwd?: string;
+    headers?: Record<string, string>;
+  }) =>
+    request<MCPServer>('/mcp/servers', { method: 'POST', body: JSON.stringify(data) }),
+
+  connectMcpServer: (id: string) =>
+    request<MCPServer>(`/mcp/servers/${encodeURIComponent(id)}/connect`, { method: 'POST' }),
+
+  disconnectMcpServer: (id: string) =>
+    request<MCPServer>(`/mcp/servers/${encodeURIComponent(id)}/disconnect`, { method: 'POST' }),
+
+  deleteMcpServer: (id: string) =>
+    request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  getMcpTools: (serverId: string) =>
+    request<{ tools: MCPTool[] }>(`/mcp/servers/${encodeURIComponent(serverId)}/tools`),
+
+  testMcpTool: (serverId: string, toolName: string, toolArgs?: unknown) =>
+    request<MCPToolCallResult>(`/mcp/servers/${encodeURIComponent(serverId)}/test-tool`, {
+      method: 'POST',
+      body: JSON.stringify({ toolName, arguments: toolArgs ?? {} }),
+    }),
+
+  getMcpPermissions: () =>
+    request<Array<{ serverId: string; serverName: string; agentType: string; toolName: string; allowed: boolean }>>('/mcp/permissions'),
+
+  getMcpPermissionsByServer: (serverId: string) =>
+    request<MCPPermission[]>(`/mcp/permissions/${encodeURIComponent(serverId)}`),
+
+  setMcpPermission: (data: {
+    serverId: string;
+    agentType: string;
+    toolName: string;
+    allowed: boolean;
+  }) =>
+    request<MCPPermission>('/mcp/permissions', { method: 'POST', body: JSON.stringify(data) }),
+
+  deleteMcpPermission: (data: {
+    serverId: string;
+    agentType: string;
+    toolName: string;
+  }) =>
+    request<void>('/mcp/permissions', {
+      method: 'DELETE',
+      body: JSON.stringify(data),
+    }),
+
 };
+
 
 // --- WebSocket (shared singleton) ---
 
