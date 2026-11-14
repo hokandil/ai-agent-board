@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
-import type { Task, Priority, ColumnId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt } from '../types.js';
+import type { Task, Priority, ColumnId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt, MCPTool } from '../types.js';
 import type { TaskRepository, ContinuationEligibility } from './types.js';
+import type { MCPServerRecord, MCPToolRecord, MCPPermissionRecord, MCPRepository } from './mcp-types.js';
 import { errorMessage } from '../utils.js';
 
 interface TaskRow {
@@ -74,7 +75,7 @@ function rowToAttempt(row: AttemptRow): ExecutionAttempt {
     status: row.status, createdAt: row.created_at };
 }
 
-export class SqliteTaskRepository implements TaskRepository {
+export class SqliteTaskRepository implements TaskRepository, MCPRepository {
   private db: Database.Database;
   private stmts: {
     getAll: Database.Statement;
@@ -402,5 +403,195 @@ export class SqliteTaskRepository implements TaskRepository {
       SELECT ?, ?, 'related', ? FROM tasks a JOIN tasks b ON b.id = ? WHERE a.id = ? AND a.project_id = b.project_id`).run(left, right, createdAt, right, left);
     const exists = this.db.prepare('SELECT 1 FROM task_relationships WHERE task_id=? AND related_task_id=?').get(left, right);
     if (!exists) throw new Error('tasks must exist in the same project');
+  }
+
+  // ─── MCP server repository ───────────────────────────────────────────────
+
+  async getAllServers(): Promise<MCPServerRecord[]> {
+    const rows = this.db.prepare('SELECT * FROM mcp_servers ORDER BY created_at ASC').all() as Array<{
+      id: string; name: string; transport: string; command: string | null;
+      args: string | null; url: string | null; env: string | null;
+      cwd: string | null; headers: string | null; status: string;
+      last_connected_at: number | null; last_error: string | null;
+      created_at: number; updated_at: number;
+    }>;
+    return rows.map(row => ({
+      id: row.id, name: row.name, transport: row.transport,
+      command: row.command ?? undefined,
+      args: row.args ? JSON.parse(row.args) : undefined,
+      url: row.url ?? undefined,
+      env: row.env ? JSON.parse(row.env) : undefined,
+      cwd: row.cwd ?? undefined,
+      headers: row.headers ? JSON.parse(row.headers) : undefined,
+      status: row.status as MCPServerRecord['status'],
+      last_connected_at: row.last_connected_at ?? undefined,
+      last_error: row.last_error ?? undefined,
+      created_at: row.created_at, updated_at: row.updated_at,
+    }));
+  }
+
+  async getServerById(id: string): Promise<MCPServerRecord | undefined> {
+    const row = this.db.prepare('SELECT * FROM mcp_servers WHERE id = ?').get(id) as {
+      id: string; name: string; transport: string; command: string | null;
+      args: string | null; url: string | null; env: string | null;
+      cwd: string | null; headers: string | null; status: string;
+      last_connected_at: number | null; last_error: string | null;
+      created_at: number; updated_at: number;
+    } | undefined;
+    if (!row) return undefined;
+    return {
+      id: row.id, name: row.name, transport: row.transport,
+      command: row.command ?? undefined,
+      args: row.args ? JSON.parse(row.args) : undefined,
+      url: row.url ?? undefined,
+      env: row.env ? JSON.parse(row.env) : undefined,
+      cwd: row.cwd ?? undefined,
+      headers: row.headers ? JSON.parse(row.headers) : undefined,
+      status: row.status as MCPServerRecord['status'],
+      last_connected_at: row.last_connected_at ?? undefined,
+      last_error: row.last_error ?? undefined,
+      created_at: row.created_at, updated_at: row.updated_at,
+    };
+  }
+
+  async createServer(server: Omit<MCPServerRecord, 'created_at' | 'updated_at'>): Promise<MCPServerRecord> {
+    const now = Date.now();
+    const record: MCPServerRecord = {
+      ...server, created_at: now, updated_at: now,
+    };
+    this.db.prepare(`
+      INSERT INTO mcp_servers (id,name,transport,command,args,url,env,cwd,headers,status,last_connected_at,last_error,created_at,updated_at)
+      VALUES (@id,@name,@transport,@command,@args,@url,@env,@cwd,@headers,@status,@last_connected_at,@last_error,@created_at,@updated_at)
+    `).run({
+      id: record.id, name: record.name, transport: record.transport,
+      command: record.command ?? null,
+      args: record.args ? JSON.stringify(record.args) : null,
+      url: record.url ?? null,
+      env: record.env ? JSON.stringify(record.env) : '{}',
+      cwd: record.cwd ?? null,
+      headers: record.headers ? JSON.stringify(record.headers) : '{}',
+      status: record.status,
+      last_connected_at: record.last_connected_at ?? null,
+      last_error: record.last_error ?? null,
+      created_at: record.created_at, updated_at: record.updated_at,
+    });
+    return record;
+  }
+
+  async updateServer(id: string, updates: Partial<MCPServerRecord>): Promise<MCPServerRecord | undefined> {
+    const existing = await this.getServerById(id);
+    if (!existing) return undefined;
+    const now = Date.now();
+    const merged: MCPServerRecord = { ...existing, ...updates, updated_at: now };
+    this.db.prepare(`
+      UPDATE mcp_servers SET
+        name = @name, transport = @transport, command = @command,
+        args = @args, url = @url, env = @env, cwd = @cwd,
+        headers = @headers, status = @status,
+        last_connected_at = @last_connected_at, last_error = @last_error,
+        updated_at = @updated_at
+      WHERE id = @id
+    `).run({
+      id: merged.id, name: merged.name, transport: merged.transport,
+      command: merged.command ?? null,
+      args: merged.args ? JSON.stringify(merged.args) : null,
+      url: merged.url ?? null,
+      env: merged.env ? JSON.stringify(merged.env) : '{}',
+      cwd: merged.cwd ?? null,
+      headers: merged.headers ? JSON.stringify(merged.headers) : '{}',
+      status: merged.status,
+      last_connected_at: merged.last_connected_at ?? null,
+      last_error: merged.last_error ?? null,
+      created_at: merged.created_at, updated_at: merged.updated_at,
+    });
+    return merged;
+  }
+
+  async deleteServer(id: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM mcp_servers WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  async getToolsByServer(serverId: string): Promise<MCPToolRecord[]> {
+    const rows = this.db.prepare('SELECT * FROM mcp_tools WHERE server_id = ? ORDER BY name ASC').all(serverId) as Array<{
+      id: string; server_id: string; name: string; description: string;
+      input_schema: string; output_schema: string | null;
+      annotations: string | null; discovered_at: number;
+    }>;
+    return rows.map(row => ({
+      id: row.id, server_id: row.server_id, name: row.name,
+      description: row.description,
+      input_schema: JSON.parse(row.input_schema),
+      output_schema: row.output_schema ? JSON.parse(row.output_schema) : undefined,
+      annotations: row.annotations ? JSON.parse(row.annotations) : undefined,
+      discovered_at: row.discovered_at,
+    }));
+  }
+
+  async upsertTools(serverId: string, tools: MCPTool[]): Promise<void> {
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM mcp_tools WHERE server_id = ?').run(serverId);
+      const insert = this.db.prepare(`
+        INSERT INTO mcp_tools (id, server_id, name, description, input_schema, output_schema, annotations, discovered_at)
+        VALUES (@id, @server_id, @name, @description, @input_schema, @output_schema, @annotations, @discovered_at)
+      `);
+      const now = Date.now();
+      for (const tool of tools) {
+        insert.run({
+          id: `${serverId}:${tool.name}`,
+          server_id: serverId, name: tool.name, description: tool.description,
+          input_schema: JSON.stringify(tool.inputSchema),
+          output_schema: tool.outputSchema ? JSON.stringify(tool.outputSchema) : null,
+          annotations: tool.annotations ? JSON.stringify(tool.annotations) : null,
+          discovered_at: now,
+        });
+      }
+    }).immediate();
+  }
+
+  async deleteToolsByServer(serverId: string): Promise<void> {
+    this.db.prepare('DELETE FROM mcp_tools WHERE server_id = ?').run(serverId);
+  }
+
+  async getPermissionsByServer(serverId: string): Promise<MCPPermissionRecord[]> {
+    const rows = this.db.prepare('SELECT * FROM mcp_permissions WHERE server_id = ? ORDER BY agent_type, tool_name').all(serverId) as Array<{
+      id: string; server_id: string; agent_type: string; tool_name: string; allowed: number;
+    }>;
+    return rows.map(row => ({
+      id: row.id, server_id: row.server_id, agent_type: row.agent_type,
+      tool_name: row.tool_name, allowed: Boolean(row.allowed),
+    }));
+  }
+
+  async getPermission(serverId: string, agentType: string, toolName: string): Promise<MCPPermissionRecord | undefined> {
+    const row = this.db.prepare('SELECT * FROM mcp_permissions WHERE server_id=? AND agent_type=? AND tool_name=?')
+      .get(serverId, agentType, toolName) as {
+        id: string; server_id: string; agent_type: string; tool_name: string; allowed: number;
+      } | undefined;
+    if (!row) return undefined;
+    return { id: row.id, server_id: row.server_id, agent_type: row.agent_type, tool_name: row.tool_name, allowed: Boolean(row.allowed) };
+  }
+
+  async setPermission(serverId: string, agentType: string, toolName: string, allowed: boolean): Promise<MCPPermissionRecord> {
+    const existing = await this.getPermission(serverId, agentType, toolName);
+    if (existing) {
+      this.db.prepare('UPDATE mcp_permissions SET allowed = ? WHERE id = ?').run(allowed ? 1 : 0, existing.id);
+      return { ...existing, allowed };
+    }
+    const id = `mcp-perm:${serverId}:${agentType}:${toolName}`;
+    this.db.prepare('INSERT INTO mcp_permissions (id, server_id, agent_type, tool_name, allowed) VALUES (?,?,?,?,?)')
+      .run(id, serverId, agentType, toolName, allowed ? 1 : 0);
+    return { id, server_id: serverId, agent_type: agentType, tool_name: toolName, allowed };
+  }
+
+  async deletePermission(serverId: string, agentType: string, toolName: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM mcp_permissions WHERE server_id=? AND agent_type=? AND tool_name=?')
+      .run(serverId, agentType, toolName);
+    return result.changes > 0;
+  }
+
+  async isToolAllowed(serverId: string, agentType: string, toolName: string): Promise<boolean> {
+    const perm = await this.getPermission(serverId, agentType, toolName);
+    return perm?.allowed ?? false;
   }
 }

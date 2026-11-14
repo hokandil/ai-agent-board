@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
-import type { Task, Priority, ColumnId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt } from '../types.js';
+import type { Task, Priority, ColumnId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt, MCPTool } from '../types.js';
 import type { TaskRepository, ContinuationEligibility } from './types.js';
+import type { MCPServerRecord, MCPToolRecord, MCPPermissionRecord, MCPRepository } from './mcp-types.js';
 import { isValidPriority, isValidColumnId, isValidAgentStatus, isValidAgentType } from '@ai-agent-board/shared/constants.js';
 import { errorMessage } from '../utils.js';
 
@@ -95,7 +96,7 @@ function rowToAttempt(row: AttemptRow): ExecutionAttempt {
     status: row.status, createdAt: Number(row.created_at) };
 }
 
-export class PostgresTaskRepository implements TaskRepository {
+export class PostgresTaskRepository implements TaskRepository, MCPRepository {
   private pool: Pool;
 
   constructor(pool: Pool) {
@@ -479,5 +480,152 @@ export class PostgresTaskRepository implements TaskRepository {
       const existing = await client.query('SELECT 1 FROM task_relationships WHERE task_id=$1 AND related_task_id=$2', [left,right]);
       if (!existing.rows[0]) throw new Error('tasks must exist in the same project');
     }
+  }
+
+  // ─── MCP server repository ───────────────────────────────────────────────
+
+  async getAllServers(): Promise<MCPServerRecord[]> {
+    const { rows } = await this.pool.query('SELECT * FROM mcp_servers ORDER BY created_at ASC');
+    return rows.map((row: any) => ({
+      id: row.id, name: row.name, transport: row.transport,
+      command: row.command ?? undefined,
+      args: row.args ? JSON.parse(row.args) : undefined,
+      url: row.url ?? undefined,
+      env: row.env ? JSON.parse(row.env) : undefined,
+      cwd: row.cwd ?? undefined,
+      headers: row.headers ? JSON.parse(row.headers) : undefined,
+      status: row.status as MCPServerRecord['status'],
+      last_connected_at: row.last_connected_at ?? undefined,
+      last_error: row.last_error ?? undefined,
+      created_at: row.created_at, updated_at: row.updated_at,
+    }));
+  }
+
+  async getServerById(id: string): Promise<MCPServerRecord | undefined> {
+    const { rows } = await this.pool.query('SELECT * FROM mcp_servers WHERE id = $1', [id]);
+    if (!rows[0]) return undefined;
+    const row = rows[0];
+    return {
+      id: row.id, name: row.name, transport: row.transport,
+      command: row.command ?? undefined,
+      args: row.args ? JSON.parse(row.args) : undefined,
+      url: row.url ?? undefined,
+      env: row.env ? JSON.parse(row.env) : undefined,
+      cwd: row.cwd ?? undefined,
+      headers: row.headers ? JSON.parse(row.headers) : undefined,
+      status: row.status as MCPServerRecord['status'],
+      last_connected_at: row.last_connected_at ?? undefined,
+      last_error: row.last_error ?? undefined,
+      created_at: row.created_at, updated_at: row.updated_at,
+    };
+  }
+
+  async createServer(server: Omit<MCPServerRecord, 'created_at' | 'updated_at'>): Promise<MCPServerRecord> {
+    const now = Date.now();
+    const record: MCPServerRecord = {
+      ...server, created_at: now, updated_at: now,
+    };
+    await this.pool.query(`
+      INSERT INTO mcp_servers (id,name,transport,command,args,url,env,cwd,headers,status,last_connected_at,last_error,created_at,updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+    `, [record.id, record.name, record.transport, record.command ?? null,
+      record.args ? JSON.stringify(record.args) : null, record.url ?? null,
+      record.env ? JSON.stringify(record.env) : '{}', record.cwd ?? null,
+      record.headers ? JSON.stringify(record.headers) : '{}', record.status,
+      record.last_connected_at ?? null, record.last_error ?? null,
+      record.created_at, record.updated_at]);
+    return record;
+  }
+
+  async updateServer(id: string, updates: Partial<MCPServerRecord>): Promise<MCPServerRecord | undefined> {
+    const existing = await this.getServerById(id);
+    if (!existing) return undefined;
+    const now = Date.now();
+    const merged: MCPServerRecord = { ...existing, ...updates, updated_at: now };
+    await this.pool.query(`
+      UPDATE mcp_servers SET
+        name = $2, transport = $3, command = $4, args = $5, url = $6,
+        env = $7, cwd = $8, headers = $9, status = $10,
+        last_connected_at = $11, last_error = $12, updated_at = $13
+      WHERE id = $1
+    `, [merged.id, merged.name, merged.transport, merged.command ?? null,
+      merged.args ? JSON.stringify(merged.args) : null, merged.url ?? null,
+      merged.env ? JSON.stringify(merged.env) : '{}', merged.cwd ?? null,
+      merged.headers ? JSON.stringify(merged.headers) : '{}', merged.status,
+      merged.last_connected_at ?? null, merged.last_error ?? null,
+      merged.updated_at]);
+    return merged;
+  }
+
+  async deleteServer(id: string): Promise<boolean> {
+    const result = await this.pool.query('DELETE FROM mcp_servers WHERE id = $1', [id]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async getToolsByServer(serverId: string): Promise<MCPToolRecord[]> {
+    const { rows } = await this.pool.query('SELECT * FROM mcp_tools WHERE server_id = $1 ORDER BY name ASC', [serverId]);
+    return rows.map((row: any) => ({
+      id: row.id, server_id: row.server_id, name: row.name,
+      description: row.description,
+      input_schema: JSON.parse(row.input_schema),
+      output_schema: row.output_schema ? JSON.parse(row.output_schema) : undefined,
+      annotations: row.annotations ? JSON.parse(row.annotations) : undefined,
+      discovered_at: row.discovered_at,
+    }));
+  }
+
+  async upsertTools(serverId: string, tools: MCPTool[]): Promise<void> {
+    await this.pool.query('DELETE FROM mcp_tools WHERE server_id = $1', [serverId]);
+    const now = Date.now();
+    for (const tool of tools) {
+      await this.pool.query(`
+        INSERT INTO mcp_tools (id, server_id, name, description, input_schema, output_schema, annotations, discovered_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `, [`${serverId}:${tool.name}`, serverId, tool.name, tool.description,
+        JSON.stringify(tool.inputSchema),
+        tool.outputSchema ? JSON.stringify(tool.outputSchema) : null,
+        tool.annotations ? JSON.stringify(tool.annotations) : null, now]);
+    }
+  }
+
+  async deleteToolsByServer(serverId: string): Promise<void> {
+    await this.pool.query('DELETE FROM mcp_tools WHERE server_id = $1', [serverId]);
+  }
+
+  async getPermissionsByServer(serverId: string): Promise<MCPPermissionRecord[]> {
+    const { rows } = await this.pool.query('SELECT * FROM mcp_permissions WHERE server_id = $1 ORDER BY agent_type, tool_name', [serverId]);
+    return rows.map((row: any) => ({
+      id: row.id, server_id: row.server_id, agent_type: row.agent_type,
+      tool_name: row.tool_name, allowed: Boolean(row.allowed),
+    }));
+  }
+
+  async getPermission(serverId: string, agentType: string, toolName: string): Promise<MCPPermissionRecord | undefined> {
+    const { rows } = await this.pool.query('SELECT * FROM mcp_permissions WHERE server_id=$1 AND agent_type=$2 AND tool_name=$3', [serverId, agentType, toolName]);
+    if (!rows[0]) return undefined;
+    const row = rows[0];
+    return { id: row.id, server_id: row.server_id, agent_type: row.agent_type, tool_name: row.tool_name, allowed: Boolean(row.allowed) };
+  }
+
+  async setPermission(serverId: string, agentType: string, toolName: string, allowed: boolean): Promise<MCPPermissionRecord> {
+    const existing = await this.getPermission(serverId, agentType, toolName);
+    if (existing) {
+      await this.pool.query('UPDATE mcp_permissions SET allowed = $1 WHERE id = $2', [allowed ? 1 : 0, existing.id]);
+      return { ...existing, allowed };
+    }
+    const id = `mcp-perm:${serverId}:${agentType}:${toolName}`;
+    await this.pool.query('INSERT INTO mcp_permissions (id, server_id, agent_type, tool_name, allowed) VALUES ($1,$2,$3,$4,$5)',
+      [id, serverId, agentType, toolName, allowed ? 1 : 0]);
+    return { id, server_id: serverId, agent_type: agentType, tool_name: toolName, allowed };
+  }
+
+  async deletePermission(serverId: string, agentType: string, toolName: string): Promise<boolean> {
+    const result = await this.pool.query('DELETE FROM mcp_permissions WHERE server_id=$1 AND agent_type=$2 AND tool_name=$3', [serverId, agentType, toolName]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async isToolAllowed(serverId: string, agentType: string, toolName: string): Promise<boolean> {
+    const perm = await this.getPermission(serverId, agentType, toolName);
+    return perm?.allowed ?? false;
   }
 }
