@@ -75,3 +75,67 @@ export interface MCPPermission {
   toolName: string;
   allowed: boolean;
 }
+
+// ─── MCP Sync types ──────────────────────────────────────────────────────
+
+export type SyncDirection = 'import_only' | 'export_only' | 'bidirectional';
+export type ConflictPolicy = 'board_wins' | 'external_wins' | 'manual';
+export type SyncConnectionStatus = 'connected' | 'error' | 'disconnected';
+
+export interface SyncConnection {
+  id: string;
+  serverId: string;
+  taskId: string;
+  externalSource: string;
+  externalKey: string;
+  externalTaskTool: string;
+  status: SyncConnectionStatus;
+  lastSyncAt?: number;
+  lastError?: string;
+  syncDirection: SyncDirection;
+  conflictPolicy: ConflictPolicy;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SyncFieldMapping {
+  id: string;
+  connectionId: string;
+  externalField: string;
+  boardField: string;
+  transform: 'identity' | 'lowercase' | 'uppercase' | 'capitalize' | 'trim';
+  defaultValue?: string;
+}
+
+export interface SyncConflict {
+  id: string;
+  connectionId: string;
+  externalField: string;
+  boardField: string;
+  externalValue?: string;
+  boardValue?: string;
+  resolvedValue?: string;
+  resolvedAt?: number;
+  resolvedBy?: string;
+  status: 'pending' | 'resolved' | 'ignored';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SyncState {
+  id: string;
+  connectionId: string;
+  lastExternalSyncedAt?: number;
+  lastBoardSyncedAt?: number;
+  syncCount: number;
+  updatedAt: number;
+}
+
+export interface SyncResult {
+  connectionId: string;
+  syncedAt: number;
+  imported: number;
+  exported: number;
+  conflicts: number;
+  errors: Array<{ field: string; message: string }>;
+}

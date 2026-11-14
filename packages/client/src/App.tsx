@@ -24,6 +24,7 @@ import { DeleteConfirmDialog } from '@/components/DeleteConfirmDialog';
 import { ProjectsPage } from '@/components/ProjectsPage';
 import type { ProjectDialogInitialValues } from '@/components/ProjectDialog';
 import { McpServerConfig } from '@/components/McpServerConfig';
+import { McpSyncConfig } from '@/components/McpSyncConfig';
 
 const STATUS_WEIGHT: Record<string, number> = { executing: 0, planning: 1, failed: 2, idle: 3, complete: 4 };
 
@@ -47,6 +48,7 @@ function BoardPage({
   toggleTheme,
   onBackToProjects,
   onNavigateMcp,
+  onNavigateMcpSync,
   initialTaskId,
 }: {
   project: Project;
@@ -54,6 +56,7 @@ function BoardPage({
   toggleTheme: () => void;
   onBackToProjects: () => void;
   onNavigateMcp: () => void;
+  onNavigateMcpSync: () => void;
   initialTaskId?: string;
 }) {
   const lockedRepoPath = project.repoPath;
@@ -399,6 +402,7 @@ function BoardPage({
         onNewTask={handleOpenDialog}
         onNewGroup={handleOpenGroupDialog}
         onNavigateMcp={onNavigateMcp}
+        onNavigateMcpSync={onNavigateMcpSync}
       />
 
       <main className="flex-1 overflow-hidden">
@@ -486,7 +490,8 @@ function BoardPage({
 type RouteState =
   | { view: 'projects'; initialCreate?: ProjectDialogInitialValues }
   | { view: 'board'; projectId?: string; taskId?: string }
-  | { view: 'mcp' };
+  | { view: 'mcp' }
+  | { view: 'mcpSync' };
 
 function parseCreateQuery(search: string): ProjectDialogInitialValues {
   const params = new URLSearchParams(search);
@@ -521,6 +526,7 @@ function parseCreateQuery(search: string): ProjectDialogInitialValues {
 function readRoute(): RouteState {
   const path = window.location.pathname.replace(/\/+$/, '') || '/';
   if (path === '/mcp') return { view: 'mcp' };
+  if (path === '/mcp/sync') return { view: 'mcpSync' };
   if (path === '/projects/new') {
     return { view: 'projects', initialCreate: parseCreateQuery(window.location.search) };
   }
@@ -581,6 +587,12 @@ export function App() {
     );
   }
 
+  if (route.view === 'mcpSync') {
+    return (
+      <McpSyncConfig />
+    );
+  }
+
   if (route.view === 'projects' || (!loading && !selectedProject)) {
     return (
       <ProjectsPage
@@ -621,6 +633,7 @@ export function App() {
       toggleTheme={toggleTheme}
       onBackToProjects={() => navigate('/projects')}
       onNavigateMcp={() => navigate('/mcp')}
+      onNavigateMcpSync={() => navigate('/mcp/sync')}
       initialTaskId={route.view === 'board' ? route.taskId : undefined}
     />
   );

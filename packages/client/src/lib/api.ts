@@ -18,6 +18,13 @@ import type {
   MCPTransportType,
   MCPToolCallResult,
   MCPPermission,
+  SyncConnection,
+  SyncDirection,
+  ConflictPolicy,
+  SyncFieldMapping,
+  SyncConflict,
+  SyncState,
+  SyncResult,
 } from '@/types';
 
 export interface TaskGroupWithChildren extends TaskGroup {
@@ -259,6 +266,62 @@ export const api = {
       method: 'DELETE',
       body: JSON.stringify(data),
     }),
+
+  // --- MCP Sync ---
+  getSyncConnections: () =>
+    request<SyncConnection[]>('/mcp/sync/connections'),
+
+  getSyncConnection: (id: string) =>
+    request<SyncConnection>(`/mcp/sync/connections/${encodeURIComponent(id)}`),
+
+  createSyncConnection: (data: {
+    serverId: string;
+    taskId: string;
+    externalSource: string;
+    externalKey: string;
+    externalTaskTool: string;
+    syncDirection?: SyncDirection;
+    conflictPolicy?: ConflictPolicy;
+  }) =>
+    request<SyncConnection>('/mcp/sync/connections', { method: 'POST', body: JSON.stringify(data) }),
+
+  syncConnection: (id: string) =>
+    request<SyncResult>(`/mcp/sync/connections/${encodeURIComponent(id)}/sync`, { method: 'POST' }),
+
+  importSyncTask: (id: string) =>
+    request<{ taskId: string; created: boolean }>(`/mcp/sync/connections/${encodeURIComponent(id)}/import`, { method: 'POST' }),
+
+  exportSyncTask: (id: string) =>
+    request<{ updated: boolean }>(`/mcp/sync/connections/${encodeURIComponent(id)}/export`, { method: 'POST' }),
+
+  deleteSyncConnection: (id: string) =>
+    request<void>(`/mcp/sync/connections/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  getSyncFieldMappings: (connectionId: string) =>
+    request<SyncFieldMapping[]>(`/mcp/sync/connections/${encodeURIComponent(connectionId)}/mappings`),
+
+  createSyncFieldMapping: (connectionId: string, data: {
+    externalField: string;
+    boardField: string;
+    transform?: SyncFieldMapping['transform'];
+    defaultValue?: string;
+  }) =>
+    request<SyncFieldMapping>(`/mcp/sync/connections/${encodeURIComponent(connectionId)}/mappings`, { method: 'POST', body: JSON.stringify(data) }),
+
+  deleteSyncFieldMapping: (id: string) =>
+    request<void>(`/mcp/sync/mappings/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  getSyncConflicts: (connectionId: string) =>
+    request<SyncConflict[]>(`/mcp/sync/connections/${encodeURIComponent(connectionId)}/conflicts`),
+
+  resolveSyncConflict: (id: string, resolvedValue: string, resolvedBy: string) =>
+    request<SyncConflict>(`/mcp/sync/conflicts/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify({ resolvedValue, resolvedBy }) }),
+
+  ignoreSyncConflict: (id: string) =>
+    request<void>(`/mcp/sync/conflicts/${encodeURIComponent(id)}/ignore`, { method: 'POST' }),
+
+  getSyncState: (connectionId: string) =>
+    request<SyncState>(`/mcp/sync/connections/${encodeURIComponent(connectionId)}/state`),
 
 };
 
