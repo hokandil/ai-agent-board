@@ -25,6 +25,7 @@ import { ProjectsPage } from '@/components/ProjectsPage';
 import type { ProjectDialogInitialValues } from '@/components/ProjectDialog';
 import { McpServerConfig } from '@/components/McpServerConfig';
 import { McpSyncConfig } from '@/components/McpSyncConfig';
+import { SessionManager } from '@/components/SessionManager';
 
 const STATUS_WEIGHT: Record<string, number> = { executing: 0, planning: 1, failed: 2, idle: 3, complete: 4 };
 
@@ -491,7 +492,8 @@ type RouteState =
   | { view: 'projects'; initialCreate?: ProjectDialogInitialValues }
   | { view: 'board'; projectId?: string; taskId?: string }
   | { view: 'mcp' }
-  | { view: 'mcpSync' };
+  | { view: 'mcpSync' }
+  | { view: 'sessions' };
 
 function parseCreateQuery(search: string): ProjectDialogInitialValues {
   const params = new URLSearchParams(search);
@@ -527,6 +529,7 @@ function readRoute(): RouteState {
   const path = window.location.pathname.replace(/\/+$/, '') || '/';
   if (path === '/mcp') return { view: 'mcp' };
   if (path === '/mcp/sync') return { view: 'mcpSync' };
+  if (path === '/sessions') return { view: 'sessions' };
   if (path === '/projects/new') {
     return { view: 'projects', initialCreate: parseCreateQuery(window.location.search) };
   }
@@ -591,6 +594,10 @@ export function App() {
     return (
       <McpSyncConfig />
     );
+  }
+
+  if (route.view === 'sessions') {
+    return <SessionManager />;
   }
 
   if (route.view === 'projects' || (!loading && !selectedProject)) {
