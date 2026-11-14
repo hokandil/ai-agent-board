@@ -18,6 +18,10 @@ export type {
   UpdateProjectRequest,
   AgentEvent,
   WSMessage,
+  SessionStatus,
+  AgentSession,
+  CreateSessionRequest,
+  SessionConcurrencyLimits,
 } from '../../../shared/types.js';
 
 export {

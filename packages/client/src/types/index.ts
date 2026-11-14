@@ -1,3 +1,5 @@
+import type { AgentType } from '../../../../shared/types.js';
+
 // Re-export all types and constants from the shared module
 export type {
   Priority,
@@ -139,3 +141,41 @@ export interface SyncResult {
   conflicts: number;
   errors: Array<{ field: string; message: string }>;
 }
+
+// ─── Agent Session types ─────────────────────────────────────────────────
+
+export type SessionStatus = 'idle' | 'planning' | 'executing' | 'complete' | 'failed' | 'stopped';
+
+export interface AgentSession {
+  id: string;
+  taskId?: string;
+  agentType: AgentType;
+  status: SessionStatus;
+  model?: string;
+  worktreePath?: string;
+  startedAt?: number;
+  completedAt?: number;
+  createdAt: number;
+}
+
+export interface CreateSessionRequest {
+  agentType: AgentType;
+  taskId?: string;
+  model?: string;
+  useWorktree?: boolean;
+  repoPath?: string;
+  branchName?: string;
+  baseBranch?: string;
+}
+
+export interface StartSessionRequest {
+  taskId?: string;
+}
+
+export interface SessionConcurrencyLimits {
+  perProvider?: Partial<Record<AgentType, number>>;
+  perProject?: Partial<Record<string, number>>;
+  global?: number;
+}
+
+
