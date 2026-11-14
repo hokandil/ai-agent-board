@@ -1,14 +1,6 @@
 export type Priority = 'low' | 'medium' | 'high' | 'critical';
 export type ColumnId = 'backlog' | 'in-progress' | 'review' | 'done';
-export type AgentStatus = 'idle' | 'planning' | 'executing' | 'complete'
-  | 'audit_log'
-  | 'audit_log'
-  | 'audit_log'
-  | 'audit_log'
-  | 'audit_log'
-  | 'audit_log'
-  | 'audit_log'
-  | 'audit_log' | 'failed';
+export type AgentStatus = 'idle' | 'planning' | 'executing' | 'complete' | 'failed';
 export type AgentType = 'copilot' | 'claude' | 'codex' | 'opencode' | 'hermes' | 'openclaw' | 'grok';
 
 export interface AgentInfo {
