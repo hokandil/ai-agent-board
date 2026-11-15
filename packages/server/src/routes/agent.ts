@@ -219,6 +219,27 @@ export function createAgentRouter(
     }
   }));
 
+  // POST /api/tasks/:id/permission-response — answer a pending agent permission request.
+  // Bound to the task; rejects unknown/already-resolved/cross-task requests (no stale approvals).
+  router.post('/:id/permission-response', asyncHandler(async (req: Request, res: Response) => {
+    const id = paramId(req);
+    const task = await repo.getById(id);
+    if (!task) { res.status(404).json({ error: 'task not found' }); return; }
+    const { requestId, approved } = req.body;
+    if (!requestId || typeof requestId !== 'string') { res.status(400).json({ error: 'requestId is required' }); return; }
+    if (typeof approved !== 'boolean') { res.status(400).json({ error: 'approved must be a boolean' }); return; }
+    const ok = agentManager.respondToPermission(task.id, requestId, approved);
+    if (!ok) { res.status(409).json({ error: 'permission request not found, already resolved, or belongs to another task' }); return; }
+    res.json({ success: true, requestId, approved });
+  }));
+
+  // GET /api/tasks/:id/permissions — pending permission requests (for panel reattachment).
+  router.get('/:id/permissions', asyncHandler(async (req: Request, res: Response) => {
+    const id = paramId(req);
+    if (!await repo.getById(id)) { res.status(404).json({ error: 'task not found' }); return; }
+    res.json(agentManager.getPendingPermissions(id));
+  }));
+
   // GET /api/tasks/:id/events?since=<timestamp>&limit=<n>
   router.get('/:id/events', asyncHandler(async (req: Request, res: Response) => {
     if (!await repo.getById(paramId(req))) {

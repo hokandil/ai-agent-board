@@ -21,6 +21,36 @@ const PATCHES = [
     replace: 'opencode server listening on',
     with: 'server listening on',
   },
+  {
+    // Stage C: await the (possibly async) onPermissionRequest hook so the Board can
+    // collect an explicit user decision before the ACP agent proceeds. Without await,
+    // an interactive hook's Promise is ignored and the request falls through to deny.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/acp-cli-provider.js',
+    replace: "session.config.hooks?.onPermissionRequest?.({ kind: hookKind }) ?? { kind: 'denied-by-rules' }",
+    with: "(await session.config.hooks?.onPermissionRequest?.({ kind: hookKind })) ?? { kind: 'denied-by-rules' }",
+  },
+  {
+    // Stage C: make the Copilot permission handler async so it can await the Board's
+    // interactive decision (the native Copilot SDK awaits this handler).
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/copilot.js',
+    replace: 'const onPermissionRequest = (req) => {',
+    with: 'const onPermissionRequest = async (req) => {',
+  },
+  {
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/copilot.js',
+    replace: 'toCopilotPermissionResult(consumerHooks.onPermissionRequest(req))',
+    with: 'toCopilotPermissionResult(await consumerHooks.onPermissionRequest(req))',
+  },
+  {
+    // Stage C: no silent auto-approve. Without an explicit consumer decision, deny.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/copilot.js',
+    replace: 'return COPILOT_APPROVED;',
+    with: 'return COPILOT_DENIED;',
+  },
 ];
 
 const repoRoot = path.resolve(__dirname, '..');

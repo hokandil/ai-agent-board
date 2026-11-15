@@ -183,6 +183,14 @@ let auditLogger: AuditLogger;
   const server = createServer(app);
   createWSS(server);
 
+  // Harden HTTP keep-alive against connection-reset (ECONNRESET) races: Node's default
+  // keepAliveTimeout (5s) can destroy an idle socket just as a client reuses it, which is
+  // more likely when the event loop is briefly blocked by synchronous git operations
+  // (project creation / repo-status detection). Keep idle connections alive longer than
+  // typical client/proxy idle timeouts; headersTimeout must exceed keepAliveTimeout.
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+
   // Surface listen failures (e.g. EADDRINUSE from an orphaned process holding
   // the port) as an actionable diagnostic and exit cleanly, instead of staying
   // alive without ever listening (a silent hang).

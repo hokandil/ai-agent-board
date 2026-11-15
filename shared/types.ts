@@ -204,7 +204,8 @@ export type AgentEventType =
   | 'test_result'
   | 'error'
   | 'complete'
-  | 'audit_log';
+  | 'audit_log'
+  | 'permission_request';
 
 export type SessionStatus = 'idle' | 'planning' | 'executing' | 'complete' | 'failed' | 'stopped';
 
@@ -257,6 +258,12 @@ export interface AgentEvent {
     error?: string;
     /** Persisted, complete assistant prose used by service integrations. */
     finalOutput?: boolean;
+    /** Interactive permission request (type 'permission_request'). */
+    permissionRequestId?: string;
+    permissionKind?: string;
+    permissionTool?: string;
+    /** Set on the follow-up event once the request is resolved. */
+    permissionDecision?: 'approved' | 'denied' | 'expired' | 'cancelled';
   };
 }
 

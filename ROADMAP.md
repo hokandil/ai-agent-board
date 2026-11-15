@@ -115,8 +115,12 @@ optional custom work). It fits **after** Stage 9 so current priorities are not d
   (`Task.agentSessionId`), terminal-session retention, true provider resume via the SDK
   `resumeSessionId`, per-project concurrency counting fix, and client event recovery on
   WebSocket reconnect.
-- **Stage C — Interactive control: pending.** Bidirectional approval / user input from the
-  Board (agent requests → Board displays → user responds without losing the session).
+- **Stage C — Interactive control: C1 DONE.** Bidirectional approval from the Board
+  (agent requests → Board displays → user responds without losing the session). Permission
+  event + registry + response API + AgentPanel UI; wired for ACP (Hermes/OpenClaw/Grok) and
+  Copilot (no auto-approve). **C2 pending:** Claude `canUseTool`, OpenCode permission API.
+  **C3 pending:** Codex limitation surfaced + expiry/cancellation hardening. See
+  `docs/AGENT_INTERACTIVE_CONTROL.md`.
 - **Stage D — MCP & skills delivery: pending.**
 
 Real-agent execution is exercised only by the opt-in live harness
@@ -125,12 +129,16 @@ simulates execution with a fake in-process provider; green CI is not proof of li
 
 ## Known issues / flaky tests
 
-- **`projects.spec.ts › Projects creation via URI › auto-creates a project when autostart=1`
-  is intermittently flaky.** Observed during the Stage B gate: the project card rendered, but a
-  subsequent direct `GET /api/projects` returned no response and the test failed; an isolated
-  rerun passed. **Root cause not established** (no server crash or error in the gate log). A
-  passing rerun is **not** proof of a fix — treat as a known flaky test until the root cause is
-  found; do not mark it resolved on a single green rerun.
+- **`projects.spec.ts` project-creation connection flake — RESOLVED (root cause found).**
+  Symptom: after a project was created, the follow-up direct `request.get(/api/projects)`
+  intermittently failed with no response / `read ECONNRESET` (seen on the autostart and
+  folder-picker tests). **Root cause:** Node's default `server.keepAliveTimeout` (5s) can
+  destroy an idle keep-alive socket just as a client reuses it; this race is aggravated when
+  the event loop is briefly blocked by synchronous git operations during project creation /
+  repo-status detection. **Fix:** harden HTTP keep-alive in `packages/server/src/index.ts`
+  (`keepAliveTimeout=65s`, `headersTimeout=66s`). Verified by a full green `gate:required`
+  (196 E2E passed) after the change, following repeated pre-fix failures. Stray leftover
+  `--watch` dev servers / an orphaned E2E server were also cleaned up during investigation.
 
 ---
 

@@ -207,6 +207,12 @@ export const api = {
   sendMessage: (id: string, message: string, attachmentIds?: string[]) =>
     request<{ success: boolean }>(`/tasks/${id}/message`, { method: 'POST', body: JSON.stringify({ message, attachmentIds }) }),
 
+  respondToPermission: (id: string, requestId: string, approved: boolean) =>
+    request<{ success: boolean; requestId: string; approved: boolean }>(`/tasks/${id}/permission-response`, { method: 'POST', body: JSON.stringify({ requestId, approved }) }),
+
+  getPendingPermissions: (id: string) =>
+    request<Array<{ requestId: string; kind: string; tool?: string; createdAt: number }>>(`/tasks/${id}/permissions`),
+
   // --- Attachments ---
   uploadAttachments: async (taskId: string, files: File[]): Promise<TaskAttachment[]> => {
     const form = new FormData();

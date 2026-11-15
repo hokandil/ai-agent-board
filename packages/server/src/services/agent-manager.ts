@@ -85,6 +85,21 @@ interface ManagedSession {
   resumeProviderSessionId?: string;
 }
 
+/** A permission request awaiting an explicit user decision (Stage C). */
+interface PendingPermission {
+  requestId: string;
+  taskId: string;
+  sessionId: string;
+  kind: string;
+  tool?: string;
+  createdAt: number;
+  resolve: (decision: 'approved' | 'denied' | 'expired' | 'cancelled') => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** How long a permission request waits for a user decision before expiring. */
+const PERMISSION_REQUEST_TTL_MS = 5 * 60_000;
+
 // Event log per task (capped to prevent unbounded growth)
 const MAX_EVENTS_PER_TASK = 2000;
 const MAX_EVENT_LOG_TASKS = 200;
@@ -159,6 +174,8 @@ export class AgentManager {
   private deletedTasks = new Set<string>();
   /** Tasks stopped by user — prevents duplicate agent_complete from terminateOnce */
   private stoppedTasks = new Set<string>();
+  /** Permission requests awaiting an explicit user decision, keyed by requestId. */
+  private pendingPermissions = new Map<string, PendingPermission>();
   private eventLogs = new Map<string, AgentEvent[]>();
   private eventRepo: TaskRepository | null = null;
   private attachmentStore: AttachmentStore | null = null;
@@ -467,6 +484,9 @@ export class AgentManager {
       }
       this.sessionToTask.delete(sessionId);
 
+      // Cancel any permission requests still awaiting a decision for this task.
+      this.cancelPendingPermissions(task.id);
+
       // Capture the provider-side session id (some providers assign it during streaming).
       this.persistProviderSessionId(task.id, entry.session?.sessionId);
 
@@ -572,6 +592,19 @@ Optional list of any work you did not complete or that should be followed up. Om
           repoPath: task.repoPath,
           resumeSessionId: entry.resumeProviderSessionId,
           systemPrompt,
+          // Stage C: interactive approval for ACP providers (Hermes/OpenClaw/Grok) and
+          // Copilot. The provider's permission request is routed to the Board and the
+          // user's explicit decision is awaited (never auto-approved). The async hook is
+          // awaited by the patched providers. Claude/OpenCode wiring is Stage C2; Codex
+          // exposes only a config approval policy (limitation surfaced, not auto-approved).
+          hooks: (['hermes', 'openclaw', 'grok', 'copilot'].includes(entry.agentType)
+            ? {
+                onPermissionRequest: (req: { kind: string }) =>
+                  this.requestPermission(task.id, sessionId, req.kind).then((decision) => ({
+                    kind: decision === 'approved' ? 'approved' : 'denied-by-rules',
+                  })),
+              }
+            : undefined) as any,
           onEvent: (coreEvent: CoreAgentEvent) => {
             try {
               const metadata: Record<string, unknown> = { ...coreEvent.metadata };
@@ -824,6 +857,7 @@ Optional list of any work you did not complete or that should be followed up. Om
     this.sessions.delete(sessionId);
     this.stoppedTasks.add(taskId || sessionId);
     setTimeout(() => this.stoppedTasks.delete(taskId || sessionId), STOPPED_TASK_TTL_MS);
+    if (taskId) this.cancelPendingPermissions(taskId);
 
     // Decrement concurrency counters
     this.providerSessionCounts.set(agentType, Math.max(0, (this.providerSessionCounts.get(agentType) || 1) - 1));
@@ -1009,6 +1043,62 @@ Optional list of any work you did not complete or that should be followed up. Om
         error: errorMessage(err),
       });
     });
+  }
+
+  // ─── Interactive permission control (Stage C) ─────────────────────
+
+  /** Raise an interactive permission request to the Board and await the user's
+   *  decision. Emits a persisted `permission_request` event; resolves when the user
+   *  responds, or with 'expired'/'cancelled' on timeout/stop. Never auto-approves. */
+  requestPermission(taskId: string, sessionId: string, kind: string, tool?: string): Promise<'approved' | 'denied' | 'expired' | 'cancelled'> {
+    const requestId = `perm-${uuid()}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => this.settlePermission(requestId, 'expired'), PERMISSION_REQUEST_TTL_MS);
+      this.pendingPermissions.set(requestId, { requestId, taskId, sessionId, kind, tool, createdAt: Date.now(), resolve, timer });
+      this.emitEvent(taskId, {
+        id: uuid(), taskId, type: 'permission_request',
+        content: `Agent requests permission: ${tool || kind}`,
+        timestamp: Date.now(),
+        metadata: { permissionRequestId: requestId, permissionKind: kind, permissionTool: tool },
+      });
+    });
+  }
+
+  /** Resolve a pending permission request with the user's decision. Returns false if
+   *  the request is unknown, belongs to a different task, or was already settled. */
+  respondToPermission(taskId: string, requestId: string, approved: boolean): boolean {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending || pending.taskId !== taskId) return false;
+    this.settlePermission(requestId, approved ? 'approved' : 'denied');
+    return true;
+  }
+
+  private settlePermission(requestId: string, decision: 'approved' | 'denied' | 'expired' | 'cancelled'): void {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) return; // already settled — never reuse a stale approval
+    this.pendingPermissions.delete(requestId);
+    clearTimeout(pending.timer);
+    this.emitEvent(pending.taskId, {
+      id: uuid(), taskId: pending.taskId, type: 'permission_request',
+      content: `Permission ${decision}: ${pending.tool || pending.kind}`,
+      timestamp: Date.now(),
+      metadata: { permissionRequestId: requestId, permissionKind: pending.kind, permissionTool: pending.tool, permissionDecision: decision },
+    });
+    pending.resolve(decision);
+  }
+
+  /** Cancel all pending permission requests for a task (on stop/destroy). */
+  cancelPendingPermissions(taskId: string): void {
+    for (const [requestId, pending] of [...this.pendingPermissions]) {
+      if (pending.taskId === taskId) this.settlePermission(requestId, 'cancelled');
+    }
+  }
+
+  /** Pending permission requests for a task (for UI reattachment). */
+  getPendingPermissions(taskId: string): Array<{ requestId: string; kind: string; tool?: string; createdAt: number }> {
+    return [...this.pendingPermissions.values()]
+      .filter((p) => p.taskId === taskId)
+      .map(({ requestId, kind, tool, createdAt }) => ({ requestId, kind, tool, createdAt }));
   }
 
   // ─── Event Management (moved from copilot.ts) ─────────────────────

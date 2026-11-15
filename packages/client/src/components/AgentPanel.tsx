@@ -43,6 +43,7 @@ const eventIconMap: Record<AgentEventType, React.ElementType> = {
   error: AlertCircle,
   complete: CheckCircle2,
   audit_log: AlertCircle,
+  permission_request: AlertCircle,
 };
 
 const eventColorMap: Record<AgentEventType, string> = {
@@ -58,6 +59,7 @@ const eventColorMap: Record<AgentEventType, string> = {
   error: 'text-red-500 dark:text-red-400',
   complete: 'text-emerald-500 dark:text-emerald-400',
   audit_log: 'text-purple-500 dark:text-purple-400',
+  permission_request: 'text-amber-500 dark:text-amber-400',
 };
 
 const eventLabelMap: Record<AgentEventType, string> = {
@@ -73,6 +75,7 @@ const eventLabelMap: Record<AgentEventType, string> = {
   error: 'Error',
   complete: 'Complete',
   audit_log: 'Audit Log',
+  permission_request: 'Permission Request',
 };
 
 /** A coalesced event merges consecutive events of the same type */
@@ -457,6 +460,30 @@ export function AgentPanel({ task, onClose, onRun, onStop, onCreatePR, onMergeLo
   const agentStatus = task?.agentStatus;
   const errorEvents = useMemo(() => events.filter((event) => event.type === 'error'), [events]);
   const latestError = errorEvents[errorEvents.length - 1];
+
+  // Stage C: pending interactive permission requests — the latest event per requestId
+  // that has not been resolved. Derived from the event stream so it survives reattach.
+  const pendingPermissions = useMemo(() => {
+    const byId = new Map<string, AgentEvent>();
+    for (const e of events) {
+      if (e.type === 'permission_request' && e.metadata?.permissionRequestId) {
+        byId.set(e.metadata.permissionRequestId, e);
+      }
+    }
+    return [...byId.values()].filter((e) => !e.metadata?.permissionDecision);
+  }, [events]);
+  const [respondingPermission, setRespondingPermission] = useState<string | null>(null);
+  const handlePermissionResponse = async (requestId: string, approved: boolean) => {
+    if (!taskId || respondingPermission) return;
+    setRespondingPermission(requestId);
+    try {
+      await api.respondToPermission(taskId, requestId, approved);
+    } catch (err) {
+      console.error('Failed to respond to permission request:', err);
+    } finally {
+      setRespondingPermission(null);
+    }
+  };
 
   useEffect(() => {
     if (!taskId) {
@@ -1129,6 +1156,34 @@ export function AgentPanel({ task, onClose, onRun, onStop, onCreatePR, onMergeLo
           )}
 
           </div>
+
+          {/* Stage C: interactive permission requests awaiting a user decision */}
+          {pendingPermissions.length > 0 && (
+            <div className="shrink-0 border-t border-amber-500/40 bg-amber-500/10 px-3 py-2 space-y-2">
+              {pendingPermissions.map((e) => (
+                <div key={e.metadata?.permissionRequestId} className="flex items-center justify-between gap-2">
+                  <div className="text-xs text-amber-600 dark:text-amber-400 min-w-0">
+                    <span className="font-medium">Permission requested:</span>{' '}
+                    <span>{e.metadata?.permissionTool || e.metadata?.permissionKind || 'action'}</span>
+                  </div>
+                  <div className="flex gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handlePermissionResponse(e.metadata!.permissionRequestId!, true)}
+                      disabled={respondingPermission === e.metadata?.permissionRequestId}
+                      className="px-2.5 py-1 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                    >Approve</button>
+                    <button
+                      type="button"
+                      onClick={() => handlePermissionResponse(e.metadata!.permissionRequestId!, false)}
+                      disabled={respondingPermission === e.metadata?.permissionRequestId}
+                      className="px-2.5 py-1 text-xs font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+                    >Deny</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Follow-up message input — fixed at bottom */}
           <div className="shrink-0 border-t border-border bg-card px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
