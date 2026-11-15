@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CreateProjectRequest, UpdateProjectRequest, Project, ProjectConfig } from '@/types';
-import { api, connectWS } from '@/lib/api';
+import { api, connectWS, describeError } from '@/lib/api';
 
 export function useProjects() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -14,7 +14,7 @@ export function useProjects() {
       const result = await api.getProjects();
       setProjects(result);
     } catch (err) {
-      setError(`Failed to load projects: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to load projects'));
     } finally {
       setLoading(false);
     }
@@ -24,7 +24,7 @@ export function useProjects() {
     try {
       setConfig(await api.getProjectConfig());
     } catch (err) {
-      setError(`Failed to load config: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to load config'));
     }
   }, []);
 
@@ -61,7 +61,7 @@ export function useProjects() {
       await refreshProjects();
       return result;
     } catch (err) {
-      setError(`Failed to create project: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to create project'));
       return undefined;
     }
   }, [refreshProjects]);
@@ -73,7 +73,7 @@ export function useProjects() {
       await refreshProjects();
       return result;
     } catch (err) {
-      setError(`Failed to update project: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to update project'));
       return undefined;
     }
   }, [refreshProjects]);
@@ -85,7 +85,7 @@ export function useProjects() {
       await refreshProjects();
       return true;
     } catch (err) {
-      setError(`Failed to delete project: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to delete project'));
       return undefined;
     }
   }, [refreshProjects]);
@@ -95,7 +95,7 @@ export function useProjects() {
       setError(null);
       return await api.validateProjectPath(repoPath);
     } catch (err) {
-      setError(`Failed to validate path: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to validate path'));
       return undefined;
     }
   }, []);
@@ -106,7 +106,7 @@ export function useProjects() {
       const result = await api.selectProjectDirectory(initialPath);
       return result.repoPath;
     } catch (err) {
-      setError(`Failed to open folder picker: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to open folder picker'));
       return undefined;
     }
   }, []);
@@ -118,7 +118,7 @@ export function useProjects() {
       setConfig(result);
       return result;
     } catch (err) {
-      setError(`Failed to update config: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to update config'));
       return undefined;
     }
   }, []);

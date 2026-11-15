@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import type { Task, AgentType, Priority, ColumnId, Project } from '@/types';
@@ -12,6 +12,7 @@ import { PRIORITY_WEIGHT } from '@/lib/priority-config';
 import { slugify } from '@/lib/utils';
 import { SK_SORT_BY, SK_SORT_DIR, SK_FILTER_AGENTS, SK_FILTER_STATUSES } from '@/lib/storage-keys';
 import { Header } from '@/components/Header';
+import { ConnectionBanner } from '@/components/ConnectionBanner';
 import type { StatusFilter } from '@/components/FilterChips';
 import { statusFilterToStatuses } from '@/components/FilterChips';
 import { Board } from '@/components/Board';
@@ -381,6 +382,24 @@ function BoardPage({
     return () => clearTimeout(timer);
   }, [error, clearError]);
 
+  // Deduplicate repeated notifications: while the backend is unavailable the
+  // same failure is reported by many requests, and the user should see it once
+  // (the persistent banner carries the state) rather than a toast storm.
+  const lastErrorRef = useRef<string | null>(null);
+  const [toastError, setToastError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!error) return;
+    if (error === lastErrorRef.current) return;
+    lastErrorRef.current = error;
+    setToastError(error);
+  }, [error]);
+
+  const handleDismissError = useCallback(() => {
+    lastErrorRef.current = null;
+    setToastError(null);
+    clearError();
+  }, [clearError]);
+
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
       <Header
@@ -406,6 +425,8 @@ function BoardPage({
         onNavigateMcp={onNavigateMcp}
         onNavigateMcpSync={onNavigateMcpSync}
       />
+
+      <ConnectionBanner />
 
       <main className="flex-1 overflow-hidden">
         <Board
@@ -471,15 +492,15 @@ function BoardPage({
 
       {/* Error toast */}
       <AnimatePresence>
-        {error && (
+        {toastError && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
             className="fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-400 shadow-lg backdrop-blur-sm"
           >
-            <span>{error}</span>
-            <button onClick={clearError} className="ml-1 flex h-11 w-11 shrink-0 items-center justify-center rounded text-red-400 hover:bg-red-500/10 hover:text-red-300 lg:h-auto lg:w-auto">
+            <span>{toastError}</span>
+            <button onClick={handleDismissError} className="ml-1 flex h-11 w-11 shrink-0 items-center justify-center rounded text-red-400 hover:bg-red-500/10 hover:text-red-300 lg:h-auto lg:w-auto">
               <X className="h-4 w-4" />
             </button>
           </motion.div>

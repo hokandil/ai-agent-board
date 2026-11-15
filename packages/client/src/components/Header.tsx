@@ -80,10 +80,12 @@ export function Header({ theme, toggleTheme, searchQuery, onSearchChange, showAr
                 <span className="text-emerald-500/70">Live</span>
               </>
             )}
-            {wsStatus === 'disconnected' && wasConnected && (
+            {wsStatus === 'disconnected' && (
               <>
                 <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                <span className="text-red-400">Reconnecting…</span>
+                <span className="text-red-400">
+                  {wasConnected ? 'Reconnecting…' : 'Backend offline'}
+                </span>
               </>
             )}
             {wsStatus === 'connecting' && (

@@ -60,11 +60,60 @@ function authHeaders(): Record<string, string> {
   return headers;
 }
 
+/**
+ * Raised when the backend could not be reached at all (the dev proxy could not
+ * connect to the API server, or the API server answered with a gateway
+ * error). Distinct from an application-level error response so the UI can
+ * show a "backend unavailable" state instead of a raw HTTP code.
+ */
+export class BackendUnavailableError extends Error {
+  readonly status: number | undefined;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = 'BackendUnavailableError';
+    this.status = status;
+  }
+}
+
+const BACKEND_DOWN_MESSAGE =
+  'Backend unavailable — the board API could not be reached. Reconnecting automatically; your input is preserved.';
+
+/** Short label for the offline state, used in toasts. */
+export const BACKEND_DOWN_TOAST_MESSAGE =
+  'Backend unavailable — reconnecting automatically. Your input has been kept.';
+
+/** Turn an unknown thrown value into a user-facing message. */
+export function describeError(err: unknown, prefix?: string): string {
+  if (err instanceof BackendUnavailableError) {
+    return prefix ? `${prefix}: ${BACKEND_DOWN_TOAST_MESSAGE}` : BACKEND_DOWN_TOAST_MESSAGE;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return prefix ? `${prefix}: ${message}` : message;
+}
+
+/** HTTP statuses that mean "the API server did not answer" rather than an app error. */
+const GATEWAY_STATUSES = new Set([502, 503, 504]);
+
 async function request<T>(url: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${url}`, {
-    headers: authHeaders(),
-    ...opts,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${url}`, {
+      headers: authHeaders(),
+      ...opts,
+    });
+  } catch (err: unknown) {
+    // Network-level failure: the proxy/server is not reachable.
+    markBackendUnavailable();
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error('[API] backend unreachable:', detail);
+    throw new BackendUnavailableError(BACKEND_DOWN_MESSAGE);
+  }
+  if (GATEWAY_STATUSES.has(res.status)) {
+    markBackendUnavailable();
+    console.error(`[API] backend gateway error ${res.status} for ${url}`);
+    throw new BackendUnavailableError(BACKEND_DOWN_MESSAGE, res.status);
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `HTTP ${res.status}`);
@@ -435,6 +484,10 @@ const reconnectListeners = new Set<ReconnectHandler>();
 let ws: WebSocket | null = null;
 let disposed = false;
 let reconnectTimer: ReturnType<typeof setTimeout>;
+/** Number of consecutive failed reconnect attempts (drives the backoff). */
+let reconnectAttempt = 0;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 15000;
 
 // Connection status tracking
 export type ConnectionStatus = 'connected' | 'disconnected' | 'connecting';
@@ -444,8 +497,18 @@ const statusListeners = new Set<(status: ConnectionStatus) => void>();
 
 function setConnectionStatus(status: ConnectionStatus) {
   if (status === 'connected') hasConnectedOnce = true;
+  if (status === connectionStatus) return;
   connectionStatus = status;
   statusListeners.forEach((fn) => fn(status));
+}
+
+/**
+ * Record that the backend answered with a gateway/network failure.
+ * Keeps the UI in the "backend unavailable" state until a request or the
+ * WebSocket succeeds again.
+ */
+function markBackendUnavailable() {
+  setConnectionStatus('disconnected');
 }
 
 export function getConnectionStatus(): ConnectionStatus {
@@ -477,6 +540,7 @@ function ensureConnection() {
 
   ws.onopen = () => {
     console.log('[WS] connected');
+    reconnectAttempt = 0;
     setConnectionStatus('connected');
     reconnectListeners.forEach((fn) => {
       try { fn(); } catch (err) { console.error('[WS] reconnect listener error:', err); }
@@ -493,9 +557,13 @@ function ensureConnection() {
 
   ws.onclose = () => {
     if (!disposed && listeners.size > 0) {
-      console.log('[WS] disconnected, reconnecting in 2s');
+      // Exponential backoff so a down backend does not produce a tight
+      // reconnect loop against the dev proxy / reverse proxy.
+      const delay = Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt);
+      reconnectAttempt += 1;
+      console.log(`[WS] disconnected, reconnecting in ${Math.round(delay / 1000)}s`);
       setConnectionStatus('disconnected');
-      reconnectTimer = setTimeout(ensureConnection, 2000);
+      reconnectTimer = setTimeout(ensureConnection, delay);
     } else {
       setConnectionStatus('disconnected');
     }

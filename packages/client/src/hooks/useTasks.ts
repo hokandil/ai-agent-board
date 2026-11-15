@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { Task, AgentType, ColumnId } from '@/types';
 import { VALID_TRANSITIONS } from '@/types';
-import { api, connectWS } from '@/lib/api';
+import { api, connectWS, describeError } from '@/lib/api';
 
 const getProjectId = (task: Task) => task.projectId ?? 'default';
 
@@ -13,7 +13,7 @@ export function useTasks(projectId = 'default') {
   // Fetch tasks on mount and when showArchived changes
   useEffect(() => {
     api.getTasks(showArchived, projectId).then(setTasks).catch((err) => {
-      setError(`Failed to load tasks: ${err.message}`);
+      setError(describeError(err, 'Failed to load tasks'));
     });
   }, [showArchived, projectId]);
 
@@ -50,7 +50,7 @@ export function useTasks(projectId = 'default') {
       );
       return newTask;
     } catch (err) {
-      setError(`Failed to create task: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to create task'));
       return undefined;
     }
   }, [projectId]);
@@ -61,7 +61,7 @@ export function useTasks(projectId = 'default') {
       setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
       return updated;
     } catch (err) {
-      setError(`Failed to start agent: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to start agent'));
       return undefined;
     }
   }, []);
@@ -95,7 +95,7 @@ export function useTasks(projectId = 'default') {
       })
       .catch((err) => {
         console.error('[moveTask] server rejected:', err);
-        setError(`Move failed: ${err.message}`);
+        setError(describeError(err, 'Move failed'));
         // Revert optimistic update by re-fetching
         api.getTasks(showArchived, projectId).then(setTasks).catch((fetchErr) => {
           console.error('[moveTask] re-fetch also failed:', fetchErr);
@@ -114,7 +114,7 @@ export function useTasks(projectId = 'default') {
       const updated = await api.runTask(id);
       setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
     } catch (err) {
-      setError(`Failed to start agent: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to start agent'));
     }
   }, []);
 
@@ -123,7 +123,7 @@ export function useTasks(projectId = 'default') {
       const result = await api.createPR(id);
       return result.url;
     } catch (err) {
-      setError(`Failed to create PR: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to create PR'));
       return undefined;
     }
   }, []);
@@ -133,7 +133,7 @@ export function useTasks(projectId = 'default') {
       await api.cleanupWorktree(id);
       setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, worktreePath: undefined } : t)));
     } catch (err) {
-      setError(`Failed to clean up worktree: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to clean up worktree'));
     }
   }, []);
 
@@ -142,7 +142,7 @@ export function useTasks(projectId = 'default') {
       const result = await api.mergeLocal(id);
       return result.baseBranch;
     } catch (err) {
-      setError(`Failed to merge locally: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to merge locally'));
       return undefined;
     }
   }, []);
@@ -152,7 +152,7 @@ export function useTasks(projectId = 'default') {
       const updated = await api.stopTask(id);
       setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
     } catch (err) {
-      setError(`Failed to stop agent: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to stop agent'));
     }
   }, []);
 
@@ -162,7 +162,7 @@ export function useTasks(projectId = 'default') {
       setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
       return updated;
     } catch (err) {
-      setError(`Failed to update task: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to update task'));
       return undefined;
     }
   }, []);
@@ -172,7 +172,7 @@ export function useTasks(projectId = 'default') {
       await api.deleteTask(id);
       setTasks((prev) => prev.filter((t) => t.id !== id));
     } catch (err) {
-      setError(`Failed to delete task: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to delete task'));
     }
   }, []);
 
@@ -181,7 +181,7 @@ export function useTasks(projectId = 'default') {
       const updated = await api.archiveTask(id);
       setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
     } catch (err) {
-      setError(`Failed to archive task: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to archive task'));
     }
   }, []);
 
@@ -190,7 +190,7 @@ export function useTasks(projectId = 'default') {
       const updated = await api.unarchiveTask(id);
       setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
     } catch (err) {
-      setError(`Failed to unarchive task: ${(err as Error).message}`);
+      setError(describeError(err, 'Failed to unarchive task'));
     }
   }, []);
 

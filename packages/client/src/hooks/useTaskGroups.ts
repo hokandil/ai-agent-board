@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { TaskGroup } from '@/types';
-import { api, connectWS } from '@/lib/api';
+import { api, connectWS, describeError } from '@/lib/api';
 import type { TaskGroupWithChildren, CreateGroupChild } from '@/lib/api';
 import type { Priority } from '@/types';
 
@@ -13,7 +13,7 @@ export function useTaskGroups(projectId = 'default') {
   // Fetch groups on mount
   useEffect(() => {
     api.getGroups(false, projectId).then(setGroups).catch((err) => {
-      setError(`Failed to load groups: ${err.message}`);
+      setError(describeError(err, 'Failed to load groups'));
     });
   }, [projectId]);
 
