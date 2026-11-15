@@ -1,31 +1,91 @@
-# Product Acceptance Report — AI Agent Board
+# Product Acceptance Report — AI Agent Board (Final)
 
-**Date:** 2026-11-15 (remediation cycle)  
+**Date:** 2026-11-15 (final remediation cycle)  
 **Repository:** `E:\MyCode\ai-agent-board`  
-**Branch:** `development`  
+**Branch:** `development` (8406cde)  
 **Fork:** `https://github.com/hokandil/ai-agent-board`  
 **Tester:** Independent QA / Technical Acceptance Engineer  
-**Method:** Live runtime testing against running server (port 8080) and client (port 8081), direct API calls, database inspection, E2E regression tests
+**Method:** Live runtime testing, direct API calls, database inspection, automated regression tests, E2E tests
 
 ---
 
-## Executive Summary
+## Release Recommendation: **NOT READY**
 
-**Status: NO-GO → PARTIAL GO** — Four critical defects were identified and remediated. The product is functional for core workflows but several acceptance scenarios remain unverified due to environment constraints.
+Critical security gap remains: MCP credentials are encrypted at rest, but plaintext fallback when `MCP_ENCRYPTION_KEY` is unset means production deployments without the key still store credentials in plaintext. Additionally, several acceptance scenarios cannot be verified due to missing dependencies (`gh` CLI, OpenCode CLI, GitHub authentication).
 
-### Remediated Defects
+---
 
-| # | Defect | Severity | Status | Fix |
-|---|--------|----------|--------|-----|
-| 1 | MCP tool-call validation failure | CRITICAL | **FIXED** | Updated `tools/call` handler schema in `mcp-board-server.ts` to include `params` with `name` and optional `arguments` (Zod v4 strips unknown keys). |
-| 2 | Missing task events endpoint | CRITICAL | **FIXED** | Added `GET /api/tasks/:id/events` route to `routes/tasks.ts` that reuses `repo.getEventsByTaskId()`. |
-| 3 | Audit logging not triggered | HIGH | **FIXED** | Added audit logging calls to MCP REST routes (`mcp.ts`), redacted secrets in `audit-logger.ts`, migrated `events.task_id` to nullable in `db.ts`. |
-| 4 | Hermes startup crash (intermittent) | MEDIUM | **MITIGATED** | Added process-level `uncaughtException`/`unhandledRejection` handlers in `index.ts`. Crash not consistently reproducible. |
+## Remediation Summary
 
-### Regression Tests Added
+### Priority 1 — Secure MCP Credentials (COMPLETED)
 
-- `packages/e2e/tests/mcp-server.spec.ts` — 7 tests covering task events endpoint, MCP server routes, and audit logging infrastructure
-- All 7 tests pass in the E2E test environment
+| Change | File(s) |
+|--------|---------|
+| AES-256-GCM encryption utility | `packages/server/src/services/credential-encryption.ts` (new) |
+| Credential service (encrypt/decrypt/redact) | `packages/server/src/services/credential-service.ts` (new) |
+| SQLite repo: encrypt on write, decrypt on read | `packages/server/src/repositories/sqlite.ts` |
+| Postgres repo: encrypt on write, decrypt on read | `packages/server/src/repositories/postgres.ts` |
+| SQLite migration: re-encrypt plaintext credentials | `packages/server/src/db.ts` |
+| Postgres migration: re-encrypt plaintext credentials | `packages/server/src/db.ts` |
+| REST response redaction of env/headers | `packages/server/src/routes/mcp.ts` |
+| Encryption tests | `packages/server/tests/credential-encryption.test.ts` (new) |
+| Migration tests | `packages/server/tests/database-migrations.test.ts` |
+
+**Verification:**
+- Encryption/decryption round-trip: **PASS** (10 unit tests)
+- Secret redaction: **PASS** (redactCredentials replaces values with `[REDACTED]`)
+- Tampered ciphertext detection: **PASS** (returns null)
+- Plaintext fallback without key: **PASS** (graceful degradation)
+- Migration of plaintext → encrypted: **PASS** (3 migration tests)
+- Idempotent migration: **PASS** (running twice produces same result)
+- Server build: **PASS**
+
+**Remaining Risk:** When `MCP_ENCRYPTION_KEY` is not set, credentials are stored in plaintext. Production deployments MUST set this key.
+
+---
+
+### Priority 2 — Outstanding Acceptance Scenarios (PARTIALLY COMPLETED)
+
+| Scenario | Status | Evidence |
+|----------|--------|----------|
+| External MCP server sync & tool discovery | **PARTIAL** | Routes and sync engine implemented. Cannot test end-to-end without a real MCP server exposing task tools. |
+| GitHub integration (Issues/PRs/CI) | **UNVERIFIED** | Routes and `gh`-CLI service implemented. Cannot test without `gh` CLI authentication and a GitHub repo. |
+| PTY session reattachment | **PARTIAL** | Server-side session persistence implemented and verified manually. WebSocket reconnects on reload. No automated reattachment test. |
+| Windows Git worktree cleanup | **PARTIAL** | `worktree-cleanup.ts` service and tests exist. Platform-dependent (passes on Windows when process use can be verified). |
+| Authentication & authorization | **PASS** | `scoped-auth.test.ts` verifies API_KEY, service tokens, scope-based access control. |
+| Two concurrent OpenCode sessions | **BLOCKED** | OpenCode CLI not installed on this system. Cannot verify. |
+
+---
+
+### Priority 3 — Agent Runtime Reliability (COMPLETED)
+
+| Change | File(s) |
+|--------|---------|
+| Structured logging with correlation IDs | `packages/server/src/services/agent-manager.ts` |
+| `AgentLogEntry` interface + `agentLog()` helper | `packages/server/src/services/agent-manager.ts` |
+| Error categories: cli_missing, startup_failure, execution_failure, persist_failure, unhandled | `packages/server/src/services/agent-manager.ts` |
+| Global `uncaughtException`/`unhandledRejection` handlers | `packages/server/src/index.ts` |
+
+**Verification:**
+- Structured logs include: level, component, agentType, sessionId, taskId, correlationId, errorCategory, message, error
+- All agent-manager error paths updated to use structured logging
+- Global process handlers prevent crashes from unhandled agent SDK errors
+- Server build: **PASS**
+
+---
+
+### Priority 4 — Regression and Release Gate (COMPLETED)
+
+| Test Suite | Result |
+|------------|--------|
+| Server unit tests | **104 pass, 0 fail, 0 skip** |
+| Client build | **PASS** |
+| Server build | **PASS** |
+| Shared build | **PASS** |
+| E2E tests (mcp-server.spec.ts) | **7 pass, 0 fail** |
+| Full E2E suite | **187 pass, 4 skip, 0 fail** |
+| MCP tool calling (manual verification) | **PASS** |
+| Audit redaction (manual verification) | **PASS** |
 
 ---
 
@@ -33,119 +93,42 @@
 
 | # | Feature | Status | Evidence |
 |---|---------|--------|----------|
-| 1 | Task creation (POST /api/tasks) | **PASS** | API calls confirmed in DB and API response |
-| 2 | Task listing (GET /api/tasks) | **PASS** | Returned created tasks with correct fields |
-| 3 | Task configuration | **PASS** | Set repoPath, branchName, agentType successfully |
-| 4 | Task update (PATCH /api/tasks/:id) | **PASS** | Reset task status back to idle |
-| 5 | Agent session start | **PASS** | Task moved to in-progress, agentStatus planning→executing |
-| 6 | Agent session stop | **PASS** | agentStatus changed to failed, session cleaned up |
-| 7 | Multi-session execution (2 agents) | **PASS** | Copilot + Hermes executing concurrently, confirmed via /api/sessions |
-| 8 | MCP server registration | **PASS** | Server registered with stdio transport |
-| 9 | MCP server connect/disconnect | **PASS** | Status changed connected→disconnected |
-| 10 | MCP tool discovery | **PASS** | All tools discovered via GET /api/mcp/servers/:id/tools |
-| 11 | **MCP tool calling** | **PASS** | Fixed — echo, calculator, secret_tool all return correct results |
-| 12 | PTY terminal session | **PASS** | PTY session created, process spawned, input sent |
-| 13 | PTY terminal input | **PASS** | Input sent successfully ("sent": true) |
-| 14 | Task events endpoint | **PASS** | GET /api/tasks/:id/events returns events array |
-| 15 | Audit logging | **PASS** | audit_log events persisted with secret redaction ([REDACTED]) |
-| 16 | External task sync | **NOT TESTED** | Routes exist but not exercised |
-| 17 | GitHub integration | **NOT TESTED** | Routes exist but not exercised |
-| 18 | WebSocket event streaming | **PARTIAL** | WS connects and broadcasts, but events endpoint was missing (now fixed) |
-| 19 | Project management | **PASS** | Default project "Chatai" exists, tasks associated correctly |
-| 20 | Windows git spawn target | **NOT TESTED** | Code exists but not exercised |
+| 1 | Task CRUD | **PASS** | API + E2E tests |
+| 2 | Agent session start/stop | **PASS** | Copilot + Hermes tested manually |
+| 3 | Multi-session execution | **PASS** | Copilot + Hermes concurrent |
+| 4 | MCP server registration/connect/disconnect | **PASS** | API + E2E |
+| 5 | MCP tool discovery | **PASS** | API + manual test |
+| 6 | **MCP tool calling** | **PASS** | Fixed — echo, calculator, secret_tool all work |
+| 7 | **Task events endpoint** | **PASS** | Fixed — GET /api/tasks/:id/events returns events |
+| 8 | **Audit logging with redaction** | **PASS** | Fixed — audit_log events persisted, secrets [REDACTED] |
+| 9 | PTY terminal | **PASS** | Session created, input sent |
+| 10 | Credential encryption at rest | **PASS** | AES-256-GCM, 10 unit tests |
+| 11 | External task sync | **PARTIAL** | Routes + engine exist, no end-to-end test |
+| 12 | GitHub integration | **UNVERIFIED** | Routes + service exist, no `gh` CLI auth |
+| 13 | PTY reattachment | **PARTIAL** | Server-side persistence verified |
+| 14 | Windows worktree cleanup | **PARTIAL** | Service + tests exist, platform-dependent |
+| 15 | Authentication/authorization | **PASS** | scoped-auth.test.ts |
+| 16 | Two concurrent OpenCode sessions | **BLOCKED** | OpenCode not installed |
 
 ---
 
-## Critical Defects — Remediation Evidence
+## Remaining Risks
 
-### Defect 1: MCP Tool Calling (FIXED)
-**Root Cause:** `z.object({ method: z.literal('tools/call') })` stripped `params` (Zod v4 strips unknown keys), so `request.params` was `undefined` in the handler.
-
-**Fix:** Updated schema to `z.object({ method: z.literal('tools/call'), params: z.object({ name: z.string(), arguments: z.record(z.string(), z.unknown()).optional() }) })`.
-
-**Evidence:** `POST /api/mcp/servers/:id/test-tool` with `{"toolName":"echo","arguments":{"message":"Hello MCP!"}}` returns `{"content":[{"type":"text","text":"Echo: Hello MCP!"}]}`.
-
-### Defect 2: Missing Task Events Endpoint (FIXED)
-**Root Cause:** No route handler for `GET /api/tasks/:id/events` existed in `routes/tasks.ts`, but client `api.ts` expected it.
-
-**Fix:** Added route handler calling `repo.getEventsByTaskId(id)` with optional `since` and `limit` query parameters.
-
-**Evidence:** E2E test `GET /api/tasks/:id/events returns task events` passes.
-
-### Defect 3: Audit Logging (FIXED)
-**Root Cause:** Audit logging calls existed in MCP board server routes but not in REST routes. Additionally, `events.task_id` was `NOT NULL` with a foreign key constraint, preventing audit events for non-task resources (MCP servers, sync connections).
-
-**Fix:**
-- Added `auditLogger.logMcpEvent()` calls to `mcp.ts` REST routes (create, sync, import, export, delete, conflict resolve/ignore)
-- Added `redactSensitive()` function to `audit-logger.ts` that scrubs API keys, tokens, passwords, and secrets
-- Migrated `events.task_id` to nullable in SQLite and PostgreSQL schemas
-- Updated `AgentEvent.taskId` to optional in `shared/types.ts`
-
-**Evidence:** Audit event recorded for `secret_tool` call shows `api_key: [REDACTED]`, `message: test` (secret redacted, non-secret preserved).
-
-### Defect 4: Hermes Startup Crash (MITIGATED)
-**Status:** Not consistently reproducible. Hermes agent started and executed successfully in multiple test runs after initial crash.
-
-**Mitigation:** Added `process.on('uncaughtException')` and `process.on('unhandledRejection')` handlers in `index.ts` to prevent server crashes from unhandled agent SDK errors.
-
-**Recommendation:** Continue monitoring in production. If crash recurs, enable detailed logging for Hermes provider ACP connection.
+1. **MCP_ENCRYPTION_KEY not set** → credentials stored in plaintext. Production MUST set this key.
+2. **No end-to-end MCP sync test** — requires an MCP server exposing task tools.
+3. **No GitHub integration test** — requires `gh` CLI authentication.
+4. **No PTY reattachment E2E test** — server-side works, client-side reconnection not automated.
+5. **No OpenCode concurrency test** — OpenCode CLI not available.
+6. **Hermes crash** — mitigated with error handlers, not confirmed fixed (intermittent).
 
 ---
 
-## Security Concerns
+## Final Verdict: **NOT READY**
 
-| Concern | Severity | Status |
-|---------|----------|--------|
-| No API_KEY configured | MEDIUM | Server warns "all endpoints are open without authentication" — must set API_KEY in production |
-| MCP credentials in plain text | MEDIUM | Credentials stored in `mcp_servers` table. Audit logger redacts them in logs, but DB storage remains plaintext. **Needs encryption at rest.** |
-| Audit log metadata | LOW | Now properly redacts secrets via `redactSensitive()` |
-| Missing task events endpoint | CRITICAL | **FIXED** |
+The product is functional for core workflows (task CRUD, agent execution, MCP tool calling, events, audit logging, credential encryption). However, it cannot be released until:
 
----
-
-## Missing Acceptance Coverage
-
-The following acceptance scenarios were **not tested** due to environment constraints:
-
-1. **External task synchronization** — MCP sync connections, field mappings, sync execution, conflict resolution
-2. **GitHub integration** — Issues, PRs, CI visibility, task sync
-3. **PTY terminal reattachment** — Browser reload and session reattachment after disconnect
-4. **Windows worktree cleanup** — Orphaned worktree recovery, process cleanup
-5. **Agent concurrency limits** — Maximum concurrent sessions per agent type/project
-6. **Task groups** — Group CRUD, group execution, parallelism slider
-7. **Authentication** — API_KEY-based Bearer token auth (tested with API_KEY unset)
-8. **Two real concurrent OpenCode sessions** — OpenCode not detected on this system
-
----
-
-## Release Blockers (Remaining)
-
-1. **Plaintext MCP credential storage** — MCP server env vars/headers stored in plaintext in database. Needs encryption at rest.
-2. **Untested acceptance scenarios** — Items 1-8 above need verification before release.
-3. **Hermes crash** — Intermittent, not consistently reproducible. Needs monitoring.
-
----
-
-## Remediation Plan
-
-### Priority 1 — Encrypt MCP credentials at rest
-Encrypt `env` and `headers` fields in `mcp_servers` table before persisting. Decrypt on read. Preserve existing connections through migration.
-
-### Priority 2 — Complete untested acceptance scenarios
-- External MCP task synchronization and conflict handling
-- GitHub Issues, PR, CI integration
-- PTY terminal output, input, browser reload, reattachment
-- Windows worktree cleanup and concurrency limits
-- Authentication and authorization boundaries
-- Two concurrent OpenCode sessions (when OpenCode is available)
-
-### Priority 3 — Hermes crash monitoring
-Add structured logging for Hermes provider startup. Monitor for recurrence in production.
-
----
-
-## Final Recommendation: PARTIAL GO
-
-Core features (task CRUD, agent execution, MCP tool calling, events, audit logging) are functional and tested. **Do not release** until MCP credential encryption is implemented and remaining acceptance scenarios are verified.
+1. `MCP_ENCRYPTION_KEY` is documented as a required production setting
+2. Remaining acceptance scenarios are verified (or explicitly accepted as out-of-scope)
+3. OpenCode CLI is available for concurrency testing (or test is removed as out-of-scope)
 
 Do not merge `development` into `main` or deploy.
