@@ -181,6 +181,7 @@ export function migrateSqliteDatabase(db: Database.Database): void {
   if (!colNames.has('run_requested_at')) db.exec(`ALTER TABLE tasks ADD COLUMN run_requested_at INTEGER`);
   if (!colNames.has('run_claimed_at')) db.exec(`ALTER TABLE tasks ADD COLUMN run_claimed_at INTEGER`);
   if (!colNames.has('timeout_minutes')) db.exec(`ALTER TABLE tasks ADD COLUMN timeout_minutes INTEGER`);
+  if (!colNames.has('agent_session_id')) db.exec(`ALTER TABLE tasks ADD COLUMN agent_session_id TEXT`);
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_external_identity ON tasks(external_source, external_key) WHERE external_source IS NOT NULL AND external_key IS NOT NULL`);
 
   // Task groups table
@@ -552,6 +553,7 @@ function ensureSqliteProjectForeignKeys(db: Database.Database): void {
         run_requested_at INTEGER,
         run_claimed_at INTEGER,
         timeout_minutes INTEGER,
+        agent_session_id TEXT,
         FOREIGN KEY (project_id) REFERENCES projects(id),
         FOREIGN KEY (group_id) REFERENCES task_groups(id) ON DELETE CASCADE
       );
@@ -560,13 +562,13 @@ function ensureSqliteProjectForeignKeys(db: Database.Database): void {
         id, title, description, priority, column_id, agent_status, created_at,
         started_at, completed_at, repo_path, branch_name, base_branch, use_worktree,
         worktree_path, agent_type, archived, project_id, group_id, group_order, summary,
-        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes
+        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id
       )
       SELECT
         id, title, description, priority, column_id, agent_status, created_at,
         started_at, completed_at, repo_path, branch_name, base_branch, use_worktree,
         worktree_path, agent_type, archived, project_id, group_id, group_order, summary,
-        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes
+        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id
       FROM tasks;
 
       DROP TABLE tasks;
@@ -690,6 +692,7 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
   await addCol('run_requested_at', 'BIGINT');
   await addCol('run_claimed_at', 'BIGINT');
   await addCol('timeout_minutes', 'INTEGER');
+  await addCol('agent_session_id', 'TEXT');
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_external_identity ON tasks(external_source, external_key) WHERE external_source IS NOT NULL AND external_key IS NOT NULL`);
 
   // Task groups table

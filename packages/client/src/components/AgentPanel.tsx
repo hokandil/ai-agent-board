@@ -516,6 +516,10 @@ export function AgentPanel({ task, onClose, onRun, onStop, onCreatePR, onMergeLo
           }];
         });
       }
+    }, () => {
+      // Recover any events missed while the socket was down so live streaming
+      // resumes without gaps after a reconnect.
+      api.getEvents(taskId).then(setEvents).catch(console.error);
     });
 
     return () => {

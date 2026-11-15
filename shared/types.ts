@@ -43,6 +43,9 @@ export interface Task {
   reviewStatus?: "pending" | "approved" | "changes_requested";
   /** Optional execution limit for this task. Omit to use the server default. */
   timeoutMinutes?: number | null;
+  /** Provider-side session/conversation id from the last agent run, persisted so
+   *  the session can be identified durably and resumed where the provider supports it. */
+  agentSessionId?: string | null;
 }
 
 /** A first-class link between two durable Board work items. */

@@ -106,5 +106,33 @@ optional custom work). It fits **after** Stage 9 so current priorities are not d
 
 ---
 
+## Agent Lifecycle Recovery (current mission)
+
+- **Stage A — Execution correctness: DONE** (`84f7b11`). Fixed `terminateOnce` crash on the
+  deleted session, durable terminal `agentStatus`, concurrency-counter release, group-queue
+  draining, and worktree-path persistence.
+- **Stage B — Session visibility & reattachment: DONE.** Durable session identity
+  (`Task.agentSessionId`), terminal-session retention, true provider resume via the SDK
+  `resumeSessionId`, per-project concurrency counting fix, and client event recovery on
+  WebSocket reconnect.
+- **Stage C — Interactive control: pending.** Bidirectional approval / user input from the
+  Board (agent requests → Board displays → user responds without losing the session).
+- **Stage D — MCP & skills delivery: pending.**
+
+Real-agent execution is exercised only by the opt-in live harness
+(`AGENTBOARD_LIVE_AGENT_TEST=1`, requires explicit authorization). The deterministic gate
+simulates execution with a fake in-process provider; green CI is not proof of live execution.
+
+## Known issues / flaky tests
+
+- **`projects.spec.ts › Projects creation via URI › auto-creates a project when autostart=1`
+  is intermittently flaky.** Observed during the Stage B gate: the project card rendered, but a
+  subsequent direct `GET /api/projects` returned no response and the test failed; an isolated
+  rerun passed. **Root cause not established** (no server crash or error in the gate log). A
+  passing rerun is **not** proof of a fix — treat as a known flaky test until the root cause is
+  found; do not mark it resolved on a single green rerun.
+
+---
+
 ## Definition of done per stage
 Implemented + integrated + verified through the intended interface + gate:required passing + committed to `development` + pushed to fork.

@@ -81,6 +81,8 @@ interface ManagedSession {
   onStatusChange?: (status: Task['agentStatus']) => void | Promise<void>;
   /** Persists the worktree path once the worktree is set up (set by startAgent). */
   onWorktreeCreated?: (worktreePath: string) => void | Promise<void>;
+  /** Provider-side session id to resume on the next start (set by resumeSession). */
+  resumeProviderSessionId?: string;
 }
 
 // Event log per task (capped to prevent unbounded growth)
@@ -465,6 +467,9 @@ export class AgentManager {
       }
       this.sessionToTask.delete(sessionId);
 
+      // Capture the provider-side session id (some providers assign it during streaming).
+      this.persistProviderSessionId(task.id, entry.session?.sessionId);
+
       // Persist the terminal task status (and drive group-queue draining) AFTER the
       // concurrency counters are released, so a drained group can start its next
       // child without being blocked by a stale counter.
@@ -565,6 +570,7 @@ Optional list of any work you did not complete or that should be followed up. Om
           contextId: sessionId,
           workingDirectory,
           repoPath: task.repoPath,
+          resumeSessionId: entry.resumeProviderSessionId,
           systemPrompt,
           onEvent: (coreEvent: CoreAgentEvent) => {
             try {
@@ -654,6 +660,12 @@ Optional list of any work you did not complete or that should be followed up. Om
         if (entry.onStatusChange) {
           Promise.resolve(entry.onStatusChange('executing')).catch(() => {});
         }
+        // Consume the one-shot resume request.
+        entry.resumeProviderSessionId = undefined;
+        // Persist the provider-side session id durably where the provider exposes it
+        // at creation time (Copilot/OpenCode/ACP). Providers that assign it later
+        // (e.g. Claude) are captured again at termination.
+        this.persistProviderSessionId(task.id, coreSession.sessionId);
 
         // Timeout guard
         const taskTimeoutMs = resolveTaskTimeoutMs(task);
@@ -676,7 +688,6 @@ Optional list of any work you did not complete or that should be followed up. Om
           });
           const entry2 = this.sessions.get(sessionId);
           if (entry2) {
-            this.sessions.delete(sessionId);
             entry2.session?.abort().catch(() => {});
             entry2.session?.destroy().catch(() => {});
           }
@@ -726,8 +737,10 @@ Optional list of any work you did not complete or that should be followed up. Om
 
         clearTimeout(timeoutId);
 
-        if (this.sessions.has(sessionId)) {
-          this.sessions.delete(sessionId);
+        // Keep the terminal session in memory so it stays visible/reattachable and
+        // resumable; the `terminated` flag (not session deletion) guards against
+        // double-processing after a timeout or stop.
+        if (!terminated) {
           if (result.status === 'complete') {
             try {
               const summary = extractTaskSummary(summaryBuffer);
@@ -783,8 +796,6 @@ Optional list of any work you did not complete or that should be followed up. Om
           timestamp: Date.now(),
         });
 
-        const entry2 = this.sessions.get(sessionId);
-        if (entry2) this.sessions.delete(sessionId);
         terminateOnce('failed', errorContent);
       }
     })().catch((err: unknown) => {
@@ -868,11 +879,18 @@ Optional list of any work you did not complete or that should be followed up. Om
     return true;
   }
 
-  /** Resume a stopped/complete/failed session. Creates a new SDK session and re-executes. */
+  /** Resume a stopped/complete/failed session. When a provider-side session id was
+   *  persisted on the task, this resumes that provider conversation (via the SDK's
+   *  resumeSessionId) instead of starting a brand-new one. Without a stored id it
+   *  starts a fresh execution — that is a re-run, not a conversation resumption. */
   async resumeSession(sessionId: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`Session not found: ${sessionId}`);
     if (entry.status === 'executing' || entry.status === 'planning') throw new Error(`Session ${sessionId} is already running`);
+
+    // Resume the provider conversation where a durable session id exists.
+    const task = entry.taskId ? await this.getTaskForSession(entry) : undefined;
+    entry.resumeProviderSessionId = task?.agentSessionId ?? undefined;
 
     // Reset to idle state for re-execution
     entry.status = 'idle';
@@ -957,15 +975,12 @@ Optional list of any work you did not complete or that should be followed up. Om
       }
     }
 
-    // Per-project limit — checked at task-assignment time since we need the task's projectId.
-    // Session creation may not have a task yet, so this is a placeholder.
+    // Per-project limit — use the maintained running-session counter (incremented on
+    // start, decremented on terminal/stop) so retained terminal sessions are not counted.
     if (projectId && limits.perProject) {
       const limit = limits.perProject[projectId];
       if (limit !== undefined) {
-        let projectCount = 0;
-        for (const entry of this.sessions.values()) {
-          if (entry.taskId) projectCount++;
-        }
+        const projectCount = this.projectSessionCounts.get(projectId) ?? 0;
         if (projectCount >= limit) {
           throw new Error(`Concurrency limit (${limit}) reached for project ${projectId}`);
         }
@@ -978,6 +993,22 @@ Optional list of any work you did not complete or that should be followed up. Om
     if (!entry.taskId || !this.eventRepo) return undefined;
     // The eventRepo is a TaskRepository, so we can get the task
     return this.eventRepo.getById(entry.taskId);
+  }
+
+  /** Durably store the provider-side session/conversation id on the task so the
+   *  session can be identified after completion/restart and resumed where supported. */
+  private persistProviderSessionId(taskId: string, providerSessionId: string | null | undefined): void {
+    if (!providerSessionId || !this.eventRepo) return;
+    void this.eventRepo.update(taskId, { agentSessionId: providerSessionId }).catch((err) => {
+      agentLog({
+        level: 'error',
+        component: 'agent-manager',
+        taskId,
+        errorCategory: 'persist_failure',
+        message: `Failed to persist provider session id for task ${taskId}`,
+        error: errorMessage(err),
+      });
+    });
   }
 
   // ─── Event Management (moved from copilot.ts) ─────────────────────

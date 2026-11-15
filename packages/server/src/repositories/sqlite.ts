@@ -30,6 +30,7 @@ interface TaskRow {
   external_source: string | null; external_key: string | null; provenance: string | null;
   run_requested_at: number | null; run_claimed_at: number | null;
   timeout_minutes: number | null;
+  agent_session_id: string | null;
 }
 
 function rowToTask(row: TaskRow): Task {
@@ -58,6 +59,7 @@ function rowToTask(row: TaskRow): Task {
     provenance: row.provenance ? JSON.parse(row.provenance) : undefined,
     runRequestedAt: row.run_requested_at ?? undefined, runClaimedAt: row.run_claimed_at ?? undefined,
     timeoutMinutes: row.timeout_minutes ?? undefined,
+    agentSessionId: row.agent_session_id ?? undefined,
   };
 }
 
@@ -102,9 +104,9 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
       getById: db.prepare('SELECT * FROM tasks WHERE id = ?'),
       insert: db.prepare(`
         INSERT INTO tasks (id, project_id, title, description, priority, column_id, agent_status, agent_type, created_at, started_at, completed_at,
-          repo_path, branch_name, base_branch, use_worktree, worktree_path, archived, group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes)
+          repo_path, branch_name, base_branch, use_worktree, worktree_path, archived, group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id)
         VALUES (@id, @project_id, @title, @description, @priority, @column_id, @agent_status, @agent_type, @created_at, @started_at, @completed_at,
-          @repo_path, @branch_name, @base_branch, @use_worktree, @worktree_path, @archived, @group_id, @group_order, @summary, @external_source, @external_key, @provenance, @run_requested_at, @run_claimed_at, @timeout_minutes)
+          @repo_path, @branch_name, @base_branch, @use_worktree, @worktree_path, @archived, @group_id, @group_order, @summary, @external_source, @external_key, @provenance, @run_requested_at, @run_claimed_at, @timeout_minutes, @agent_session_id)
       `),
       update: db.prepare(`
         UPDATE tasks SET
@@ -123,7 +125,7 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
           worktree_path = @worktree_path,
           archived = @archived,
           summary = @summary, run_requested_at = @run_requested_at, run_claimed_at = @run_claimed_at,
-          timeout_minutes = @timeout_minutes
+          timeout_minutes = @timeout_minutes, agent_session_id = @agent_session_id
         WHERE id = @id
       `),
       delete: db.prepare('DELETE FROM tasks WHERE id = ?'),
@@ -188,6 +190,7 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
       summary: task.summary ?? null, external_source: task.externalSource ?? null, external_key: task.externalKey ?? null,
       provenance: task.provenance ? JSON.stringify(task.provenance) : null, run_requested_at: task.runRequestedAt ?? null, run_claimed_at: task.runClaimedAt ?? null,
       timeout_minutes: task.timeoutMinutes ?? null,
+      agent_session_id: task.agentSessionId ?? null,
     });
   }
 
@@ -232,6 +235,7 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
         archived: merged.archived ? 1 : 0,
         summary: merged.summary ?? null, run_requested_at: merged.runRequestedAt ?? null, run_claimed_at: merged.runClaimedAt ?? null,
         timeout_minutes: merged.timeoutMinutes ?? null,
+        agent_session_id: merged.agentSessionId ?? null,
       });
       return merged;
   }
