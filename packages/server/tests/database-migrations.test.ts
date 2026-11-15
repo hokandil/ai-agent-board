@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import Database from 'better-sqlite3';
 import { initPostgresDatabase, migrateSqliteDatabase } from '../src/db.js';
+import { encrypt, decrypt, isEncrypted } from '../src/services/credential-encryption.js';
 
 test('SQLite migration backfills legacy external tasks idempotently with safe deterministic snapshots', () => {
   const db = new Database(':memory:');
@@ -90,4 +91,104 @@ test('PostgreSQL migration fails closed when a project foreign key cannot be ins
     },
   };
   await assert.rejects(initPostgresDatabase(pool as never), /foreign key blocked/);
+});
+
+test('SQLite migration re-encrypts plaintext MCP credentials', () => {
+  process.env.MCP_ENCRYPTION_KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+
+  const db = new Database(':memory:');
+  try {
+    db.pragma('foreign_keys=ON');
+    migrateSqliteDatabase(db);
+
+    // Insert a server with plaintext credentials
+    db.prepare(`INSERT INTO mcp_servers
+      (id, name, transport, command, args, url, env, cwd, headers, status, created_at, updated_at)
+      VALUES (?, 'Test Server', 'stdio', 'node', '[]', null, ?, null, ?, 'disconnected', ?, ?)`)
+      .run('server-1',
+        JSON.stringify({ api_key: 'sk-plaintext-secret', token: 'my-token' }),
+        JSON.stringify({ authorization: 'Bearer plaintext-token' }),
+        Date.now(), Date.now());
+
+    // Run migration again - should re-encrypt plaintext credentials
+    migrateSqliteDatabase(db);
+
+    const row = db.prepare('SELECT env, headers FROM mcp_servers WHERE id = ?').get('server-1') as { env: string; headers: string };
+    assert.ok(isEncrypted(row.env), 'env should be encrypted after migration');
+    assert.ok(isEncrypted(row.headers), 'headers should be encrypted after migration');
+
+    // Decrypt and verify content matches original
+    const decryptedEnv = JSON.parse(decrypt(row.env)!);
+    assert.equal(decryptedEnv.api_key, 'sk-plaintext-secret');
+    assert.equal(decryptedEnv.token, 'my-token');
+
+    const decryptedHeaders = JSON.parse(decrypt(row.headers)!);
+    assert.equal(decryptedHeaders.authorization, 'Bearer plaintext-token');
+
+    // Idempotent: running again should not change anything
+    const rowBefore = { env: row.env, headers: row.headers };
+    migrateSqliteDatabase(db);
+    const rowAfter = db.prepare('SELECT env, headers FROM mcp_servers WHERE id = ?').get('server-1') as { env: string; headers: string };
+    assert.equal(rowAfter.env, rowBefore.env);
+    assert.equal(rowAfter.headers, rowBefore.headers);
+  } finally {
+    db.close();
+    delete process.env.MCP_ENCRYPTION_KEY;
+  }
+});
+
+test('SQLite migration skips already-encrypted credentials', () => {
+  process.env.MCP_ENCRYPTION_KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+
+  const db = new Database(':memory:');
+  try {
+    db.pragma('foreign_keys=ON');
+    migrateSqliteDatabase(db);
+
+    // Insert a server with already-encrypted credentials
+    const encryptedEnv = encrypt(JSON.stringify({ api_key: 'sk-encrypted' }));
+    const encryptedHeaders = encrypt(JSON.stringify({ authorization: 'Bearer encrypted' }));
+
+    db.prepare(`INSERT INTO mcp_servers
+      (id, name, transport, command, args, url, env, cwd, headers, status, created_at, updated_at)
+      VALUES (?, 'Test Server', 'stdio', 'node', '[]', null, ?, null, ?, 'disconnected', ?, ?)`)
+      .run('server-2', encryptedEnv, encryptedHeaders, Date.now(), Date.now());
+
+    const rowBefore = db.prepare('SELECT env, headers FROM mcp_servers WHERE id = ?').get('server-2') as { env: string; headers: string };
+
+    // Run migration - should not change already-encrypted values
+    migrateSqliteDatabase(db);
+    const rowAfter = db.prepare('SELECT env, headers FROM mcp_servers WHERE id = ?').get('server-2') as { env: string; headers: string };
+    assert.equal(rowAfter.env, rowBefore.env);
+    assert.equal(rowAfter.headers, rowBefore.headers);
+  } finally {
+    db.close();
+    delete process.env.MCP_ENCRYPTION_KEY;
+  }
+});
+
+test('SQLite migration with no encryption key leaves credentials plaintext', () => {
+  delete process.env.MCP_ENCRYPTION_KEY;
+
+  const db = new Database(':memory:');
+  try {
+    db.pragma('foreign_keys=ON');
+    migrateSqliteDatabase(db);
+
+    db.prepare(`INSERT INTO mcp_servers
+      (id, name, transport, command, args, url, env, cwd, headers, status, created_at, updated_at)
+      VALUES (?, 'Test Server', 'stdio', 'node', '[]', null, ?, null, ?, 'disconnected', ?, ?)`)
+      .run('server-3',
+        JSON.stringify({ api_key: 'sk-plaintext' }),
+        JSON.stringify({ authorization: 'Bearer plain' }),
+        Date.now(), Date.now());
+
+    migrateSqliteDatabase(db);
+
+    const row = db.prepare('SELECT env, headers FROM mcp_servers WHERE id = ?').get('server-3') as { env: string; headers: string };
+    assert.equal(isEncrypted(row.env), false, 'env should remain plaintext without encryption key');
+    assert.equal(isEncrypted(row.headers), false, 'headers should remain plaintext without encryption key');
+  } finally {
+    db.close();
+  }
 });
