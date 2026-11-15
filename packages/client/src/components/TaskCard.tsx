@@ -199,6 +199,31 @@ function TaskCardComponent({ task, onClick, onEdit, onDelete, onArchive, onUnarc
                 {agentDisplay?.emoji} {agentDisplay?.label}
               </span>
             )}
+            {/* Agent status chip — makes the execution state explicit instead of an icon-only hint */}
+            {task.columnId !== 'backlog' && (
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
+                  task.agentStatus === 'failed'
+                    ? 'border-red-500/40 bg-red-500/10 text-red-500'
+                    : task.agentStatus === 'executing' || task.agentStatus === 'planning'
+                      ? 'border-blue-500/40 bg-blue-500/10 text-blue-500'
+                      : task.agentStatus === 'complete'
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500'
+                        : 'border-border bg-muted text-muted-foreground'
+                )}
+                title={`Agent run status: ${agentStatus.label}`}
+              >
+                <StatusIcon
+                  className={cn(
+                    'h-3 w-3',
+                    task.agentStatus === 'executing' && 'animate-spin',
+                    task.agentStatus === 'planning' && 'animate-pulse'
+                  )}
+                />
+                {agentStatus.label}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -217,20 +242,39 @@ function TaskCardComponent({ task, onClick, onEdit, onDelete, onArchive, onUnarc
                 {formatCompletedDuration(task.startedAt, task.completedAt)}
               </span>
             )}
-
-            {/* Agent status */}
-            <div className={cn('flex items-center gap-1', agentStatus.className)}>
-              <StatusIcon
-                className={cn(
-                  'h-3.5 w-3.5',
-                  task.agentStatus === 'executing' && 'animate-spin',
-                  task.agentStatus === 'planning' && 'animate-pulse'
-                )}
-              />
-            </div>
           </div>
         </div>
       </div>
+
+      {/* Failed agent run banner — a failed run must never look like work in progress */}
+      {task.agentStatus === 'failed' && !task.archived && (
+        <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5">
+          <span className="flex items-center gap-1 text-[11px] font-medium text-red-500">
+            <AlertCircle className="h-3 w-3 shrink-0" />
+            Agent run failed
+          </span>
+          {onRetry && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onRetry(task);
+              }}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-red-500 transition-colors hover:bg-red-500/20"
+            >
+              <RotateCw className="h-3 w-3" />
+              Retry run
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Awaiting run — a card parked in In Progress with no active session */}
+      {task.columnId === 'in-progress' && task.agentStatus === 'idle' && !task.archived && (
+        <div className="mt-2 flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] font-medium text-amber-500">
+          <Circle className="h-3 w-3 shrink-0" />
+          No agent run in progress
+        </div>
+      )}
 
       {/* Active indicator bar */}
       {isActive && (

@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Plus,
   Archive,
+  AlertCircle,
 } from 'lucide-react';
 import type { Column as ColumnType, Task } from '@/types';
 import { TaskCard } from './TaskCard';
@@ -63,6 +64,13 @@ export function Column({ column, tasks, onTaskClick, onEditTask, onDeleteTask, o
     return map[column.color] || 'bg-zinc-400';
   }, [column.color]);
 
+  // Failed agent runs inside a column — surfaced so a column never implies
+  // that every card in it is progressing.
+  const failedCount = useMemo(
+    () => tasks.filter((t) => t.agentStatus === 'failed' && !t.archived).length,
+    [tasks]
+  );
+
   return (
     <div className="flex h-full w-full min-w-0 flex-col" data-column={column.id}>
       {/* Column header */}
@@ -75,6 +83,15 @@ export function Column({ column, tasks, onTaskClick, onEditTask, onDeleteTask, o
           <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-muted px-1.5 text-xs font-medium text-muted-foreground">
             {tasks.length}
           </span>
+          {failedCount > 0 && (
+            <span
+              className="flex h-5 items-center gap-1 rounded-full border border-red-500/30 bg-red-500/10 px-1.5 text-xs font-medium text-red-500"
+              title={`${failedCount} task(s) with a failed agent run`}
+            >
+              <AlertCircle className="h-3 w-3" />
+              {failedCount}
+            </span>
+          )}
         </div>
         {column.id === 'backlog' && onAddTask && (
           <motion.button

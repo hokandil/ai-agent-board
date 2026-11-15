@@ -270,7 +270,12 @@ export function McpServerConfig(_props: {
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground truncate">{serverIdentity(s)}</p>
+                  <p className="text-xs text-muted-foreground truncate" title={`id: ${s.id}`}>
+                    {serverIdentity(s)}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground/70 truncate font-mono" title={s.id}>
+                    {s.id.replace(/^mcp-server:/, '').slice(0, 8)}
+                  </p>
                 </td>
                 <td className="py-2">{s.transport}</td>
                 <td className="py-2">

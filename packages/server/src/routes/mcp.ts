@@ -79,6 +79,28 @@ export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManag
       res.status(400).json({ error: `${transport} transport requires a url` }); return;
     }
 
+    // Prevent accidental duplicate registrations: the same name pointing at the
+    // same endpoint is almost always an accidental double-add.
+    const all = await repo.getAllServers();
+    const normalizedName = name.trim().toLowerCase();
+    const endpoint = transport === 'stdio'
+      ? `${command ?? ''} ${(args ?? []).join(' ')}`.trim()
+      : (url ?? '').trim();
+    const duplicate = all.find((s) => {
+      if (s.name.trim().toLowerCase() !== normalizedName) return false;
+      const otherEndpoint = s.transport === 'stdio'
+        ? `${s.command ?? ''} ${(s.args ?? []).join(' ')}`.trim()
+        : (s.url ?? '').trim();
+      return otherEndpoint === endpoint;
+    });
+    if (duplicate) {
+      res.status(409).json({
+        error: `An MCP server named "${name}" already points at the same endpoint`,
+        existingId: duplicate.id,
+      });
+      return;
+    }
+
     const id = `mcp-server:${randomUUID()}`;
     const now = Date.now();
     const server: MCPServer = {
