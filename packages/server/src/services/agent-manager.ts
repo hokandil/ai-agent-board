@@ -22,6 +22,24 @@ import { gitExecFileSync } from '../routes/helpers.js';
 import { detectAvailableAgents } from './agent-detection.js';
 import { resolveTaskTimeoutMs } from './agent-timeout.js';
 
+/** Structured log entry for agent lifecycle events. */
+interface AgentLogEntry {
+  level: 'info' | 'warn' | 'error';
+  component: 'agent-manager';
+  agentType?: AgentType;
+  sessionId?: string;
+  taskId?: string;
+  correlationId?: string;
+  errorCategory?: 'cli_missing' | 'startup_failure' | 'execution_failure' | 'persist_failure' | 'worktree_failure' | 'unhandled';
+  message: string;
+  error?: string;
+}
+
+/** Emit a structured log entry as a single-line JSON object. */
+function agentLog(entry: AgentLogEntry): void {
+  console.log(JSON.stringify(entry));
+}
+
 function loadAttachmentAsBase64(filePath: string, displayName: string, mimeType: string): AgentAttachment | null {
   try {
     if (!fs.existsSync(filePath)) {
@@ -202,7 +220,14 @@ export class AgentManager {
         try {
           await provider.start();
         } catch (err: unknown) {
-          console.error(`[agent-manager] failed to start ${info.displayName}: ${errorMessage(err)}`);
+          agentLog({
+            level: 'error',
+            component: 'agent-manager',
+            agentType: info.name as AgentType,
+            errorCategory: 'startup_failure',
+            message: `Failed to start agent provider: ${info.displayName}`,
+            error: errorMessage(err),
+          });
           // Mark as unavailable
           const agentInfo = this.availableAgents.find(a => a.name === info.name);
           if (agentInfo) {
@@ -272,7 +297,14 @@ export class AgentManager {
     }
 
     this.sessions.set(sessionId, entry);
-    console.log(`[session] created ${sessionId} (agent=${agentType}, task=${taskId ?? 'none'})`);
+    agentLog({
+      level: 'info',
+      component: 'agent-manager',
+      agentType,
+      sessionId,
+      taskId: taskId ?? undefined,
+      message: `Session created: agent=${agentType}, task=${taskId ?? 'none'}`,
+    });
     return sessionId;
   }
 
@@ -318,6 +350,15 @@ export class AgentManager {
     const provider = this.providers.get(entry.agentType);
     if (!provider) {
       entry.status = 'failed';
+      agentLog({
+        level: 'error',
+        component: 'agent-manager',
+        agentType: entry.agentType,
+        sessionId,
+        taskId: task.id,
+        errorCategory: 'startup_failure',
+        message: `No provider registered for agent type: ${entry.agentType}`,
+      });
       this.emitEvent(task.id, {
         id: uuid(), taskId: task.id, type: 'error',
         content: `No provider registered for agent type: ${entry.agentType}`,
@@ -330,6 +371,16 @@ export class AgentManager {
     const agentInfo = this.availableAgents.find(a => a.name === entry.agentType);
     if (!agentInfo?.available) {
       entry.status = 'failed';
+      agentLog({
+        level: 'error',
+        component: 'agent-manager',
+        agentType: entry.agentType,
+        sessionId,
+        taskId: task.id,
+        errorCategory: 'startup_failure',
+        message: `Agent not available: ${provider.displayName}`,
+        error: agentInfo?.reason,
+      });
       this.emitEvent(task.id, {
         id: uuid(), taskId: task.id, type: 'error',
         content: `Agent ${provider.displayName} is not available: ${agentInfo?.reason || 'unknown reason'}`,
@@ -553,7 +604,15 @@ Optional list of any work you did not complete or that should be followed up. Om
         const timeoutId = setTimeout(() => {
           if (!this.sessions.has(sessionId)) return;
           const timeoutMsg = `Agent timed out after ${Math.round(taskTimeoutMs / 60000)} minutes`;
-          console.warn(`[agent-manager] task ${task.id} timed out after ${taskTimeoutMs}ms`);
+          agentLog({
+            level: 'warn',
+            component: 'agent-manager',
+            agentType: entry.agentType,
+            sessionId,
+            taskId: task.id,
+            errorCategory: 'execution_failure',
+            message: timeoutMsg,
+          });
           this.emitEvent(task.id, {
             id: uuid(), taskId: task.id, type: 'error',
             content: timeoutMsg,
@@ -588,8 +647,26 @@ Optional list of any work you did not complete or that should be followed up. Om
         }
 
         console.log(`[agent-manager] executing ${entry.agentType} for task ${task.id} (session ${sessionId})${agentAttachments?.length ? ` with ${agentAttachments.length} image(s)` : ''}`);
+        agentLog({
+          level: 'info',
+          component: 'agent-manager',
+          agentType: entry.agentType,
+          sessionId,
+          taskId: task.id,
+          message: `Agent execution started`,
+        });
         const result = await coreSession.execute(prompt, agentAttachments);
         console.log(`[agent-manager] ${entry.agentType} ${result.status} for task ${task.id} (session ${sessionId})${result.error ? `: ${result.error}` : ''}`);
+        agentLog({
+          level: result.status === 'complete' ? 'info' : 'error',
+          component: 'agent-manager',
+          agentType: entry.agentType,
+          sessionId,
+          taskId: task.id,
+          errorCategory: result.status === 'complete' ? undefined : 'execution_failure',
+          message: `Agent execution ${result.status}${result.error ? `: ${result.error}` : ''}`,
+          error: result.error,
+        });
 
         clearTimeout(timeoutId);
 
@@ -607,7 +684,16 @@ Optional list of any work you did not complete or that should be followed up. Om
                 });
               }
             } catch (err) {
-              console.error(`[agent-manager] failed to persist result for task ${task.id}:`, errorMessage(err));
+              agentLog({
+                level: 'error',
+                component: 'agent-manager',
+                agentType: entry.agentType,
+                sessionId,
+                taskId: task.id,
+                errorCategory: 'persist_failure',
+                message: `Failed to persist result for task ${task.id}`,
+                error: errorMessage(err),
+              });
             }
           }
           terminateOnce(result.status, result.error);
@@ -624,6 +710,17 @@ Optional list of any work you did not complete or that should be followed up. Om
           ? `${provider.displayName} CLI is not installed or not found in PATH.`
           : `Failed to start ${provider.displayName} session: ${message}`;
 
+        agentLog({
+          level: 'error',
+          component: 'agent-manager',
+          agentType: entry.agentType,
+          sessionId,
+          taskId: task.id,
+          errorCategory: isCliMissing ? 'cli_missing' : 'startup_failure',
+          message: errorContent,
+          error: message,
+        });
+
         this.emitEvent(task.id, {
           id: uuid(), taskId: task.id, type: 'error',
           content: errorContent,
@@ -635,7 +732,16 @@ Optional list of any work you did not complete or that should be followed up. Om
         terminateOnce('failed', errorContent);
       }
     })().catch((err: unknown) => {
-      console.error(`[agent-manager] unhandled error for task ${task.id} (session ${sessionId}):`, err);
+      agentLog({
+        level: 'error',
+        component: 'agent-manager',
+        agentType: entry.agentType,
+        sessionId,
+        taskId: task.id,
+        errorCategory: 'unhandled',
+        message: `Unhandled error in agent session`,
+        error: errorMessage(err),
+      });
       terminateOnce('failed');
     });
   }
