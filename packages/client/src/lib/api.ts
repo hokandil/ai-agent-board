@@ -235,6 +235,21 @@ export const api = {
   deleteMcpServer: (id: string) =>
     request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  updateMcpServer: (id: string, data: {
+    name?: string;
+    transport?: MCPTransportType;
+    command?: string;
+    args?: string[];
+    url?: string;
+    env?: Record<string, string>;
+    cwd?: string;
+    headers?: Record<string, string>;
+  }) =>
+    request<MCPServer>(`/mcp/servers/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
   getMcpTools: (serverId: string) =>
     request<{ tools: MCPTool[] }>(`/mcp/servers/${encodeURIComponent(serverId)}/tools`),
 

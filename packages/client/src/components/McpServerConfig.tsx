@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Circle, Plug, Plus, RefreshCw, Sliders, Trash2, X,
+  Circle, Plug, Plus, RefreshCw, Sliders, Trash2, X, Edit2,
 } from 'lucide-react';
 import type { MCPServer, MCPTool, MCPTransportType } from '@/types';
 import { api } from '@/lib/api';
@@ -108,6 +108,31 @@ export function McpServerConfig(_props: {
     }
   }, [loadServers]);
 
+  const handleUpdate = useCallback(async (data: {
+    name?: string;
+    transport?: MCPTransportType;
+    command?: string;
+    args?: string[];
+    url?: string;
+    env?: Record<string, string>;
+    cwd?: string;
+    headers?: Record<string, string>;
+  }) => {
+    setError(null);
+    try {
+      const updated = await api.updateMcpServer(editingServer!.id, data);
+      setServers((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      setOpenForm(false);
+      setEditingServer(null);
+      if (selectedServerId === updated.id) {
+        const data = await api.getMcpTools(updated.id);
+        setTools(data.tools);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to update server');
+    }
+  }, [editingServer, selectedServerId]);
+
   const handleCreate = useCallback(async (data: {
     name: string;
     transport: MCPTransportType;
@@ -178,6 +203,26 @@ export function McpServerConfig(_props: {
   };
 
   const isConnected = (s: MCPServer) => s.status === 'connected';
+  const isConnecting = (s: MCPServer) => s.status === 'connecting';
+  const hasError = (s: MCPServer) => s.status === 'error' || !!s.last_error;
+
+  // Detect duplicate server names (case-insensitive)
+  const nameCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of servers) {
+      const key = s.name.toLowerCase();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [servers]);
+
+  const isDuplicateName = (s: MCPServer) => (nameCounts.get(s.name.toLowerCase()) ?? 0) > 1;
+
+  // Get a short display identifier for dedup
+  const serverIdentity = (s: MCPServer) => {
+    if (s.transport === 'stdio') return s.command ?? s.name;
+    return s.url ?? s.name;
+  };
 
   return (
     <div className="space-y-6">
@@ -216,42 +261,73 @@ export function McpServerConfig(_props: {
           <tbody>
             {servers.map((s) => (
               <tr key={s.id} className="border-b">
-                <td className="py-2 font-medium">{s.name}</td>
+                <td className="py-2 font-medium">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate">{s.name}</span>
+                    {isDuplicateName(s) && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-500">
+                        Duplicate name
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate">{serverIdentity(s)}</p>
+                </td>
                 <td className="py-2">{s.transport}</td>
                 <td className="py-2">
                   <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border ${statusBadge(s.status)}`}>
-                    <Circle className={`h-2 w-2 ${isConnected(s) ? 'bg-current' : 'bg-muted'}`} />
+                    <Circle className={`h-2 w-2 ${isConnected(s) ? 'bg-current' : isConnecting(s) ? 'bg-yellow-500' : 'bg-muted'}`} />
                     {s.status}
                   </span>
+                  {hasError(s) && s.last_error && (
+                    <p className="text-[10px] text-red-500 mt-1">{s.last_error}</p>
+                  )}
                 </td>
                 <td className="py-2 text-right">
-                  {!isConnected(s) ? (
+                  <div className="flex flex-col items-end gap-1">
+                    {!isConnected(s) ? (
+                      <>
+                        <button
+                          onClick={() => handleConnect(s.id)}
+                          className="px-3 py-1 text-xs font-medium rounded-md border bg-green-500/10 text-green-600 hover:bg-green-500/20"
+                        >
+                          Connect
+                        </button>
+                        {hasError(s) && (
+                          <button
+                            onClick={() => handleConnect(s.id)}
+                            className="ml-1 px-3 py-1 text-xs font-medium rounded-md border bg-orange-500/10 text-orange-600 hover:bg-orange-500/20"
+                          >
+                            Retry
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => handleDisconnect(s.id)}
+                        className="px-3 py-1 text-xs font-medium rounded-md border bg-red-500/10 text-red-600 hover:bg-red-500/20"
+                      >
+                        Disconnect
+                      </button>
+                    )}
                     <button
-                      onClick={() => handleConnect(s.id)}
-                      className="px-3 py-1 text-xs font-medium rounded-md border bg-green-500/10 text-green-600 hover:bg-green-500/20"
+                      onClick={() => loadTools(s.id)}
+                      className="ml-2 px-3 py-1 text-xs font-medium rounded-md border text-muted-foreground hover:bg-muted"
                     >
-                      Connect
+                      <Sliders className="h-3 w-3 mr-1" /> Tools
                     </button>
-                  ) : (
                     <button
-                      onClick={() => handleDisconnect(s.id)}
-                      className="px-3 py-1 text-xs font-medium rounded-md border bg-red-500/10 text-red-600 hover:bg-red-500/20"
+                      onClick={() => { setEditingServer(s); setOpenForm(true); }}
+                      className="ml-2 px-3 py-1 text-xs font-medium rounded-md border text-muted-foreground hover:bg-muted"
                     >
-                      Disconnect
+                      <Edit2 className="h-3 w-3 mr-1" /> Edit
                     </button>
-                  )}
-                  <button
-                    onClick={() => loadTools(s.id)}
-                    className="ml-2 px-3 py-1 text-xs font-medium rounded-md border text-muted-foreground hover:bg-muted"
-                  >
-                    <Sliders className="h-3 w-3 mr-1" /> Tools
-                  </button>
-                  <button
-                    onClick={() => { setDeletingServer(s.id); }}
-                    className="ml-2 px-3 py-1 text-xs font-medium rounded-md border text-destructive hover:bg-destructive/10"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
+                    <button
+                      onClick={() => { setDeletingServer(s.id); }}
+                      className="ml-2 px-3 py-1 text-xs font-medium rounded-md border text-destructive hover:bg-destructive/10"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -340,11 +416,7 @@ export function McpServerConfig(_props: {
                           <button
                             key={at}
                             onClick={() => handleSetPermission(selectedServerId!, at, t.name, !(perm?.allowed ?? false))}
-                            className={`px-2 py-1 text-xs font-medium rounded border transition ${
-                              perm?.allowed
-                                ? 'bg-green-500/20 text-green-600 border-green-500/30'
-                                : 'bg-muted text-muted-foreground border-muted/30'
-                            }`}
+                            className={`px-2 py-1 text-xs font-medium rounded border transition ${ perm?.allowed ? 'bg-green-500/20 text-green-600 border-green-500/30' : 'bg-muted text-muted-foreground border-muted/30' }`}
                           >
                             {at}{perm?.allowed ? ' ✓' : ''}
                           </button>
@@ -393,11 +465,25 @@ export function McpServerConfig(_props: {
                     command: (formData.get('command') as string) || undefined,
                     args: formData.get('args') ? ((formData.get('args') as string).split(',').map(s => s.trim()).filter(Boolean)) : [],
                     url: (formData.get('url') as string) || undefined,
-                    env: {},
+                    env: pairsToObj(
+                      Array.from(formData.getAll('env_key')).map((key, i) => ({
+                        key: (key as string),
+                        value: (formData.getAll('env_value')[i] as string) ?? '',
+                      }))
+                    ),
                     cwd: (formData.get('cwd') as string) || undefined,
-                    headers: {},
+                    headers: pairsToObj(
+                      Array.from(formData.getAll('header_key')).map((key, i) => ({
+                        key: (key as string),
+                        value: (formData.getAll('header_value')[i] as string) ?? '',
+                      }))
+                    ),
                   };
-                  handleCreate(data);
+                  if (editingServer) {
+                    handleUpdate(data);
+                  } else {
+                    handleCreate(data);
+                  }
                 }}
                 className="space-y-3"
               >
@@ -424,33 +510,40 @@ export function McpServerConfig(_props: {
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Command (stdio)</label>
-                  <input
-                    name="command"
-                    defaultValue={editingServer?.command ?? ''}
-                    className="w-full border rounded px-2 py-1 text-sm"
-                    placeholder="e.g. npx mcp-server-git"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Args (comma-separated)</label>
-                  <input
-                    name="args"
-                    defaultValue={editingServer?.args?.join(', ') ?? ''}
-                    className="w-full border rounded px-2 py-1 text-sm"
-                    placeholder="e.g. --tool, --option"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">URL (streamable-http / sse)</label>
-                  <input
-                    name="url"
-                    defaultValue={editingServer?.url ?? ''}
-                    className="w-full border rounded px-2 py-1 text-sm"
-                    placeholder="e.g. https://example.com/mcp"
-                  />
-                </div>
+                {editingServer?.transport !== 'streamable-http' && editingServer?.transport !== 'sse' && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Command (stdio)</label>
+                    <input
+                      name="command"
+                      defaultValue={editingServer?.command ?? ''}
+                      className="w-full border rounded px-2 py-1 text-sm"
+                      placeholder="e.g. npx mcp-server-git"
+                    />
+                  </div>
+                )}
+                {editingServer?.transport !== 'streamable-http' && editingServer?.transport !== 'sse' && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Args (comma-separated)</label>
+                    <input
+                      name="args"
+                      defaultValue={editingServer?.args?.join(', ') ?? ''}
+                      className="w-full border rounded px-2 py-1 text-sm"
+                      placeholder="e.g. --tool, --option"
+                    />
+                  </div>
+                )}
+                {(editingServer?.transport === 'streamable-http' || editingServer?.transport === 'sse') && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">URL</label>
+                    <input
+                      name="url"
+                      defaultValue={editingServer?.url ?? ''}
+                      className="w-full border rounded px-2 py-1 text-sm"
+                      placeholder="e.g. https://example.com/mcp"
+                      required
+                    />
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm font-medium mb-1">Working directory (cwd)</label>
                   <input
@@ -460,6 +553,97 @@ export function McpServerConfig(_props: {
                     placeholder="e.g. /home/user/project"
                   />
                 </div>
+                {(editingServer?.transport === 'streamable-http' || editingServer?.transport === 'sse') && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Environment Variables</label>
+                      <p className="text-xs text-muted-foreground mb-2">
+                        Credentials are stored encrypted. Redacted values below indicate existing secrets;
+                        leave unchanged to preserve them.
+                      </p>
+                      <div className="space-y-1">
+                        {envPairs(editingServer?.env ?? {}).map(({ key, value }, i) => (
+                          <div key={i} className="flex gap-2">
+                            <input
+                              name="env_key"
+                              defaultValue={key}
+                              className="border rounded px-2 py-1 text-sm w-1/3"
+                              readOnly
+                            />
+                            <input
+                              name="env_value"
+                              defaultValue={value === '[REDACTED]' ? '' : value}
+                              className="border rounded px-2 py-1 text-sm w-2/3"
+                              placeholder="Enter value to change"
+                            />
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            const container = e.currentTarget.parentElement!;
+                            const row = document.createElement('div');
+                            row.className = 'flex gap-2';
+                            row.innerHTML = `
+                              <input name="env_key" class="border rounded px-2 py-1 text-sm w-1/3" placeholder="KEY">
+                              <input name="env_value" class="border rounded px-2 py-1 text-sm w-2/3" placeholder="value">
+                              <button type="button" class="text-red-500 hover:text-red-700">×</button>
+                            `;
+                            row.querySelector('button')!.addEventListener('click', () => row.remove());
+                            container.insertBefore(row, container.lastElementChild);
+                          }}
+                          className="text-xs text-primary hover:text-primary/90"
+                        >
+                          + Add variable
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">HTTP Headers</label>
+                      <p className="text-xs text-muted-foreground mb-2">
+                        Sent with every HTTP request to this MCP server.
+                      </p>
+                      <div className="space-y-1">
+                        {envPairs(editingServer?.headers ?? {}).map(({ key, value }, i) => (
+                          <div key={i} className="flex gap-2">
+                            <input
+                              name="header_key"
+                              defaultValue={key}
+                              className="border rounded px-2 py-1 text-sm w-1/3"
+                              readOnly
+                            />
+                            <input
+                              name="header_value"
+                              defaultValue={value === '[REDACTED]' ? '' : value}
+                              className="border rounded px-2 py-1 text-sm w-2/3"
+                              placeholder="Enter value to change"
+                            />
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            const container = e.currentTarget.parentElement!;
+                            const row = document.createElement('div');
+                            row.className = 'flex gap-2';
+                            row.innerHTML = `
+                              <input name="header_key" class="border rounded px-2 py-1 text-sm w-1/3" placeholder="KEY">
+                              <input name="header_value" class="border rounded px-2 py-1 text-sm w-2/3" placeholder="value">
+                              <button type="button" class="text-red-500 hover:text-red-700">×</button>
+                            `;
+                            row.querySelector('button')!.addEventListener('click', () => row.remove());
+                            container.insertBefore(row, container.lastElementChild);
+                          }}
+                          className="text-xs text-primary hover:text-primary/90"
+                        >
+                          + Add header
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
                 <div className="flex items-center justify-between pt-3">
                   <button
                     type="button"
@@ -522,4 +706,15 @@ export function McpServerConfig(_props: {
       </AnimatePresence>
     </div>
   );
+}
+
+function envPairs(obj: Record<string, string>): { key: string; value: string }[] {
+  return Object.entries(obj).map(([key, value]) => ({ key, value }));
+}
+
+function pairsToObj(pairs: { key: string; value: string }[]): Record<string, string> {
+  return pairs.reduce((acc, { key, value }) => {
+    if (key.trim()) acc[key.trim()] = value;
+    return acc;
+  }, {} as Record<string, string>);
 }

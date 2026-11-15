@@ -93,6 +93,56 @@ export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManag
     res.status(201).json(serverRecordToResponse(created));
   }));
 
+  // PUT /api/mcp/servers/:id — update an MCP server configuration
+  router.put('/servers/:id', asyncHandler(async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const server = await repo.getServerById(id);
+    if (!server) { res.status(404).json({ error: 'MCP server not found' }); return; }
+
+    const { name, transport, command, args, url, env, cwd, headers } = req.body;
+
+    if (name !== undefined && (typeof name !== 'string' || !name.trim())) {
+      res.status(400).json({ error: 'name must be a non-empty string' }); return;
+    }
+    if (transport !== undefined && !isValidTransport(transport)) {
+      res.status(400).json({ error: 'invalid transport' }); return;
+    }
+
+    // Validate transport-specific fields after applying updates
+    const nextTransport = transport ?? server.transport;
+    const nextCommand = command !== undefined ? command : server.command;
+    const nextUrl = url !== undefined ? url : server.url;
+
+    if (nextTransport === 'stdio' && !nextCommand) {
+      res.status(400).json({ error: 'stdio transport requires a command' }); return;
+    }
+    if ((nextTransport === 'streamable-http' || nextTransport === 'sse') && !nextUrl) {
+      res.status(400).json({ error: `${nextTransport} transport requires a url` }); return;
+    }
+
+    const updates: Partial<MCPServer> = {};
+    if (name !== undefined) updates.name = name.trim();
+    if (transport !== undefined) updates.transport = transport;
+    if (command !== undefined) updates.command = command;
+    if (args !== undefined) updates.args = args;
+    if (url !== undefined) updates.url = url;
+    if (env !== undefined) updates.env = env;
+    if (cwd !== undefined) updates.cwd = cwd;
+    if (headers !== undefined) updates.headers = headers;
+
+    const updated = await repo.updateServer(id, updates);
+    if (!updated) { res.status(500).json({ error: 'Failed to update server' }); return; }
+
+    // Disconnect if the server was connected so config changes take effect
+    if (mcpClientManager.isConnected(id)) {
+      await mcpClientManager.disconnect(id);
+      await repo.updateServer(id, { status: 'disconnected', last_error: undefined });
+    }
+
+    const latest = await repo.getServerById(id);
+    res.json(serverRecordToResponse(latest!));
+  }));
+
   // POST /api/mcp/servers/:id/connect — connect to an MCP server
   router.post('/servers/:id/connect', asyncHandler(async (req: Request, res: Response) => {
     const id = req.params.id as string;
