@@ -168,6 +168,10 @@ export class McpBoardServer {
     this.server.setRequestHandler(
       z.object({
         method: z.literal('tools/call'),
+        params: z.object({
+          name: z.string(),
+          arguments: z.record(z.string(), z.unknown()).optional(),
+        }),
       }),
       async (request: any) => {
         const { name: toolName, arguments: args } = request.params;

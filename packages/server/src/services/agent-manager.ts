@@ -845,6 +845,13 @@ Optional list of any work you did not complete or that should be followed up. Om
     }
     const STREAMABLE = new Set(['output', 'thinking']);
 
+    // Events without a task ID (e.g., audit events) bypass stream buffering
+    const tid = event.taskId;
+    if (!tid) {
+      broadcast({ type: 'agent_event', payload: event });
+      return;
+    }
+
     const flushBuffer = (taskId: string) => {
       const buf = this.streamBuffer.get(taskId);
       if (buf) {
@@ -855,21 +862,21 @@ Optional list of any work you did not complete or that should be followed up. Om
     };
 
     if (STREAMABLE.has(event.type)) {
-      const existing = this.streamBuffer.get(event.taskId);
+      const existing = this.streamBuffer.get(tid);
       if (existing && existing.event.type === event.type) {
         // Same type — merge content and reset timer
         clearTimeout(existing.timer);
         existing.event.content += event.content;
-        existing.timer = setTimeout(() => flushBuffer(event.taskId), STREAM_BUFFER_FLUSH_MS);
+        existing.timer = setTimeout(() => flushBuffer(tid), STREAM_BUFFER_FLUSH_MS);
       } else {
         // Different type or no buffer — flush existing, start new buffer
-        if (existing) flushBuffer(event.taskId);
-        const timer = setTimeout(() => flushBuffer(event.taskId), STREAM_BUFFER_FLUSH_MS);
-        this.streamBuffer.set(event.taskId, { event: { ...event }, timer });
+        if (existing) flushBuffer(tid);
+        const timer = setTimeout(() => flushBuffer(tid), STREAM_BUFFER_FLUSH_MS);
+        this.streamBuffer.set(tid, { event: { ...event }, timer });
       }
     } else {
       // Non-streamable: flush pending buffer first, then broadcast immediately
-      flushBuffer(event.taskId);
+      flushBuffer(tid);
       broadcast({ type: 'agent_event', payload: event });
     }
   }

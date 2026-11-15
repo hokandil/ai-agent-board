@@ -4,6 +4,8 @@ import type { MCPServer, MCPTool, MCPTransportType, MCPConnectionStatus } from '
 import type { TaskRepository } from '../repositories/types.js';
 import type { MCPRepository } from '../repositories/mcp-types.js';
 import type { AgentManager } from '../services/agent-manager.js';
+import type { AuditLogger } from '../services/audit-logger.js';
+import { redactSensitive } from '../services/audit-logger.js';
 import { mcpClientManager } from '../services/mcp-client.js';
 import { asyncHandler } from './helpers.js';
 
@@ -32,7 +34,7 @@ function serverRecordToResponse(record: any): MCPServer {
   };
 }
 
-export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManager: AgentManager): Router {
+export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManager: AgentManager, auditLogger: AuditLogger): Router {
   const router = Router();
 
   // ─── MCP Server CRUD ───────────────────────────────────────────────────
@@ -174,9 +176,11 @@ export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManag
 
     try {
       const result = await mcpClientManager.callTool(id, toolName, args ?? {});
+      await auditLogger.logMcpEvent(id, 'mcp.tool.call', undefined, undefined, { tool: toolName, toolArgs: redactSensitive(args) });
       res.json(result);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
+      await auditLogger.logMcpEvent(id, 'mcp.tool.call', undefined, undefined, { tool: toolName, toolArgs: redactSensitive(args), error: message });
       res.status(500).json({ error: `Tool call failed: ${message}` });
     }
   }));

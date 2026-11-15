@@ -212,7 +212,7 @@ export interface SessionConcurrencyLimits {
 
 export interface AgentEvent {
   id: string;
-  taskId: string;
+  taskId?: string;
   type: AgentEventType;
   content: string;
   timestamp: number;

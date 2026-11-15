@@ -197,6 +197,22 @@ export function createTaskRouter(repo: TaskRepository, agentManager: AgentManage
     });
   }));
 
+  // GET /api/tasks/:id/events - get task event stream
+  router.get('/:id/events', asyncHandler(async (req: Request, res: Response) => {
+    const id = paramId(req);
+    const task = await repo.getById(id);
+    if (!task) {
+      res.status(404).json({ error: 'task not found' });
+      return;
+    }
+    const events = await repo.getEventsByTaskId(id);
+    const since = Number(req.query.since);
+    const filtered = since > 0 ? events.filter(e => e.timestamp > since) : events;
+    const limit = Number(req.query.limit);
+    const result = limit > 0 ? filtered.slice(-limit) : filtered;
+    res.json(result);
+  }));
+
   // PATCH /api/tasks/:id
   router.patch('/:id', asyncHandler(async (req: Request, res: Response) => {
     const task = await repo.getById(paramId(req));

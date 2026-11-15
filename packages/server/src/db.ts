@@ -98,6 +98,34 @@ export function migrateSqliteDatabase(db: Database.Database): void {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id, timestamp ASC)`);
   }
 
+  // Migrate events.task_id to nullable for audit/session events without a task FK.
+  const eventCols = db.pragma('table_info(events)') as { name: string; notnull: number }[];
+  const taskIdCol = eventCols.find((c) => c.name === 'task_id');
+  if (taskIdCol && taskIdCol.notnull === 1) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      db.exec([
+        'BEGIN;',
+        'CREATE TABLE events_new (',
+        '  id         TEXT PRIMARY KEY,',
+        '  task_id    TEXT,',
+        '  type       TEXT NOT NULL,',
+        '  content    TEXT NOT NULL,',
+        '  timestamp  INTEGER NOT NULL,',
+        '  metadata   TEXT,',
+        '  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE',
+        ');',
+        'INSERT INTO events_new SELECT * FROM events;',
+        'DROP TABLE events;',
+        'ALTER TABLE events_new RENAME TO events;',
+        'COMMIT;',
+      ].join('\n'));
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON');
+    }
+    db.exec('CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id, timestamp ASC)');
+  }
+
   // Index for fast lookups by task_id + ordering by timestamp
   db.exec(`CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id, timestamp ASC)`);
 
@@ -789,7 +817,7 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS events (
       id         TEXT PRIMARY KEY,
-      task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      task_id    TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       type       TEXT NOT NULL,
       content    TEXT NOT NULL,
       timestamp  BIGINT NOT NULL,

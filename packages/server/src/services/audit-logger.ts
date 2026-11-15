@@ -52,6 +52,44 @@ export interface AuditLogEntry {
   userAgent?: string;
 }
 
+/** Keys that indicate sensitive values and should be redacted from audit logs. */
+const SENSITIVE_KEYS = new Set([
+  'apiKey', 'apikey', 'api_key',
+  'token', 'access_token', 'refresh_token', 'id_token',
+  'password', 'passwd', 'secret', 'private_key', 'client_secret',
+  'authorization', 'auth', 'credential', 'credentials',
+  'session', 'session_id', 'sessionId',
+  'github_token', 'gh_token', 'pat',
+]);
+
+/** Redact sensitive values from a record, replacing them with '[REDACTED]'. */
+export function redactSensitive(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') {
+    // Redact strings that look like tokens/keys (long hex/base64 strings)
+    if (typeof value === 'string' && value.length > 20 && /^[A-Za-z0-9+/=_-]+$/.test(value)) {
+      return '[REDACTED]';
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(redactSensitive);
+  }
+  if (typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      const lowerKey = key.toLowerCase();
+      if (SENSITIVE_KEYS.has(lowerKey)) {
+        result[key] = '[REDACTED]';
+      } else {
+        result[key] = redactSensitive(val);
+      }
+    }
+    return result;
+  }
+  return value;
+}
+
 export class AuditLogger {
   private repo: TaskRepository;
 
@@ -79,21 +117,20 @@ export class AuditLogger {
       action: params.action,
       resourceType: params.resourceType,
       resourceId: params.resourceId,
-      previousValues: params.previousValues,
-      newValues: params.newValues,
-      metadata: params.metadata,
+      previousValues: params.previousValues ? (redactSensitive(params.previousValues) as Record<string, unknown>) : undefined,
+      newValues: params.newValues ? (redactSensitive(params.newValues) as Record<string, unknown>) : undefined,
+      metadata: params.metadata ? (redactSensitive(params.metadata) as Record<string, unknown>) : undefined,
       ipAddress: params.ipAddress,
       userAgent: params.userAgent,
     };
 
     await this.repo.insertEvent({
       id: entry.id,
-      taskId: params.resourceId,
+      taskId: entry.resourceType === 'task' ? params.resourceId : undefined,
       type: 'audit_log',
       content: JSON.stringify(entry),
       timestamp: entry.timestamp,
-      metadata: {
-      },
+      metadata: {},
     });
   }
 
@@ -203,5 +240,12 @@ export class AuditLogger {
           return { id: e.id, content: e.content, timestamp: e.timestamp };
         }
       });
+  }
+
+  async getAllAuditLog(_limit = 100): Promise<any[]> {
+    // The repository interface only supports per-task event queries.
+    // A production deployment may add a dedicated audit table for global queries.
+    // Return empty; callers should use per-task getAuditLog.
+    return [];
   }
 }
