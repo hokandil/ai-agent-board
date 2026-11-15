@@ -476,6 +476,22 @@ export const api = {
   deletePtySession: (id: string) =>
     request<void>(`/pty/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  // --- GitHub Sync ---
+  getGitHubIssues: (repoPath: string, limit?: number) =>
+    request<{ issues: any[] }>(`/github/tasks/${encodeURIComponent(repoPath)}/issues?limit=${limit ?? 10}`, { method: 'GET' }),
+
+  getGitHubPullRequests: (repoPath: string, limit?: number) =>
+    request<{ pullRequests: any[] }>(`/github/tasks/${encodeURIComponent(repoPath)}/pulls?limit=${limit ?? 10}`, { method: 'GET' }),
+
+  getGitHubCIRuns: (repoPath: string, limit?: number) =>
+    request<{ ciRuns: any[] }>(`/github/tasks/${encodeURIComponent(repoPath)}/ci?limit=${limit ?? 10}`, { method: 'GET' }),
+
+  getGitHubIssue: (repoPath: string, issueNumber: number) =>
+    request<any>(`/github/tasks/${encodeURIComponent(repoPath)}/issues/${issueNumber}`, { method: 'GET' }),
+
+  getGitHubPullRequest: (repoPath: string, prNumber: number) =>
+    request<any>(`/github/tasks/${encodeURIComponent(repoPath)}/pulls/${prNumber}`, { method: 'GET' }),
+
 };
 
 
@@ -709,21 +725,4 @@ export function connectWS(onMessage: WSMessageHandler, onReconnect?: ReconnectHa
       ws = null;
     }
   };
-
-  // --- GitHub Sync ---
-  getGitHubIssues: (repoPath: string, limit?: number) =>
-    request<{ issues: any[] }>(`/github/tasks/${encodeURIComponent(repoPath)}/issues?limit=${limit ?? 10}`, { method: "GET" });
-
-  getGitHubPullRequests: (repoPath: string, limit?: number) =>
-    request<{ pullRequests: any[] }>(`/github/tasks/${encodeURIComponent(repoPath)}/pulls?limit=${limit ?? 10}`, { method: "GET" });
-
-  getGitHubCIRuns: (repoPath: string, limit?: number) =>
-    request<{ ciRuns: any[] }>(`/github/tasks/${encodeURIComponent(repoPath)}/ci?limit=${limit ?? 10}`, { method: "GET" });
-
-  getGitHubIssue: (repoPath: string, issueNumber: number) =>
-    request<any>(`/github/tasks/${encodeURIComponent(repoPath)}/issues/${issueNumber}`, { method: "GET" });
-
-  getGitHubPullRequest: (repoPath: string, prNumber: number) =>
-    request<any>(`/github/tasks/${encodeURIComponent(repoPath)}/pulls/${prNumber}`, { method: "GET" });
-
 }

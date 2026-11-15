@@ -208,8 +208,6 @@ export class SyncEngineImpl implements SyncEngine {
   }
 }
 
-/** Singleton instance used by the MCP sync routes. */
-export const syncEngine = new SyncEngineImpl(
-  {} as SyncRepository,
-  {} as TaskRepository,
-);
+// NOTE: no module-level singleton. The MCP sync routes construct a SyncEngineImpl
+// with the real repositories (see createMcpSyncRouter). A previous stub-injected
+// singleton here made sync/import/export throw at runtime.

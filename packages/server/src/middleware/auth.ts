@@ -46,7 +46,9 @@ export function requiredScope(req: Request): ServiceScope | undefined {
     if (method === 'GET') return 'mcp:read';
     if (p === '/mcp/servers' || p === '/mcp/permissions') return 'mcp:write';
     if (/^\/mcp\/servers\/[^/]+\/connect$/.test(p) && method === 'POST') return 'mcp:connect';
-    if (p.startsWith('/mcp/server')) {
+    // Board-as-MCP-server endpoint only. Must not prefix-match '/mcp/servers/...'
+    // (the MCP server CRUD routes), which previously inherited mcp:board:* scopes.
+    if (p === '/mcp/server' || p.startsWith('/mcp/server/')) {
       if (method === 'GET') return 'mcp:board:read';
       if (method === 'POST') return 'mcp:board:write';
     }

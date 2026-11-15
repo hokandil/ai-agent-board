@@ -330,7 +330,7 @@ export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManag
 
   // GET /api/mcp/permissions/:serverId — list permissions for a server
   router.get('/permissions/:serverId', asyncHandler(async (req: Request, res: Response) => {
-    const serverId = req.params.id as string;
+    const serverId = req.params.serverId as string;
     const server = await repo.getServerById(serverId);
     if (!server) { res.status(404).json({ error: 'MCP server not found' }); return; }
 

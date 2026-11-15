@@ -5,13 +5,16 @@ import type { TaskRepository } from '../repositories/types.js';
 import type { MCPRepository } from '../repositories/mcp-types.js';
 import type { SyncRepository } from '../repositories/mcp-sync-types.js';
 import type { AuditLogger } from '../services/audit-logger.js';
-import { syncEngine } from '../services/mcp-sync.js';
+import { SyncEngineImpl } from '../services/mcp-sync.js';
 import { asyncHandler } from './helpers.js';
 
 type FullRepo = TaskRepository & MCPRepository & SyncRepository;
 
 export function createMcpSyncRouter(repo: FullRepo, auditLogger: AuditLogger): Router {
   const router = Router();
+  // Construct the sync engine with the real repositories. (Previously a module-level
+  // singleton was built with stub repos, so sync/import/export threw at runtime.)
+  const syncEngine = new SyncEngineImpl(repo, repo);
 
   // ─── Sync Connection CRUD ─────────────────────────────────────────────
 
