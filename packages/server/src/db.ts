@@ -2,6 +2,11 @@ import Database from 'better-sqlite3';
 import { Pool } from 'pg';
 import path from 'path';
 import fs from 'fs';
+import {
+  encrypt,
+  isEncrypted,
+  isEncryptionConfigured,
+} from './services/credential-encryption.js';
 
 // ─── SQLite ──────────────────────────────────────────────────────────────────
 
@@ -356,6 +361,32 @@ export function migrateSqliteDatabase(db: Database.Database): void {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_server ON mcp_permissions(server_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_agent ON mcp_permissions(agent_type)`);
+
+  // Migrate any plaintext MCP credentials to encrypted storage.
+  // Rerunnable: only re-encrypts values that are not already in the encrypted envelope format.
+  if (isEncryptionConfigured()) {
+    const servers = db.prepare('SELECT id, env, headers FROM mcp_servers').all() as Array<{
+      id: string; env: string | null; headers: string | null;
+    }>;
+    for (const s of servers) {
+      let changed = false;
+      let newEnv = s.env;
+      let newHeaders = s.headers;
+      if (s.env && s.env !== '{}' && !isEncrypted(s.env)) {
+        const enc = encrypt(s.env);
+        if (enc) { newEnv = enc; changed = true; }
+      }
+      if (s.headers && s.headers !== '{}' && !isEncrypted(s.headers)) {
+        const enc = encrypt(s.headers);
+        if (enc) { newHeaders = enc; changed = true; }
+      }
+      if (changed) {
+        db.prepare('UPDATE mcp_servers SET env = @env, headers = @headers, updated_at = @updated_at WHERE id = @id').run({
+          id: s.id, env: newEnv, headers: newHeaders, updated_at: Date.now(),
+        });
+      }
+    }
+  }
 
   // ─── MCP external task synchronization ────────────────────────────────────
 
@@ -908,6 +939,33 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_server ON mcp_permissions(server_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_agent ON mcp_permissions(agent_type)`);
+
+  // Migrate any plaintext MCP credentials to encrypted storage.
+  // Rerunnable: only re-encrypts values that are not already in the encrypted envelope format.
+  if (isEncryptionConfigured()) {
+    const { rows } = await pool.query<{ id: string; env: string; headers: string }>(
+      'SELECT id, env, headers FROM mcp_servers'
+    );
+    for (const s of rows) {
+      let changed = false;
+      let newEnv = s.env;
+      let newHeaders = s.headers;
+      if (s.env && s.env !== '{}' && !isEncrypted(s.env)) {
+        const enc = encrypt(s.env);
+        if (enc) { newEnv = enc; changed = true; }
+      }
+      if (s.headers && s.headers !== '{}' && !isEncrypted(s.headers)) {
+        const enc = encrypt(s.headers);
+        if (enc) { newHeaders = enc; changed = true; }
+      }
+      if (changed) {
+        await pool.query(
+          'UPDATE mcp_servers SET env = $1, headers = $2, updated_at = $3 WHERE id = $4',
+          [newEnv, newHeaders, Date.now(), s.id]
+        );
+      }
+    }
+  }
 
   // ─── MCP external task synchronization ────────────────────────────────────
 

@@ -23,15 +23,26 @@ function serverRecordToResponse(record: any): MCPServer {
     command: record.command ?? undefined,
     args: record.args ?? undefined,
     url: record.url ?? undefined,
-    env: record.env ?? undefined,
+    env: record.env ? redactMcpCredentials(record.env) : undefined,
     cwd: record.cwd ?? undefined,
-    headers: record.headers ?? undefined,
+    headers: record.headers ? redactMcpCredentials(record.headers) : undefined,
     status: record.status as MCPConnectionStatus,
     last_connected_at: record.last_connected_at ?? undefined,
     last_error: record.last_error ?? undefined,
     created_at: record.created_at,
     updated_at: record.updated_at,
   };
+}
+
+/** Redact credential values in an env/headers record for REST API responses.
+ * Replaces each value with '[REDACTED]' but preserves the keys so callers
+ * know which fields are configured without exposing the secrets. */
+function redactMcpCredentials(creds: Record<string, string>): Record<string, string> {
+  const redacted: Record<string, string> = {};
+  for (const key of Object.keys(creds)) {
+    redacted[key] = '[REDACTED]';
+  }
+  return redacted;
 }
 
 export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManager: AgentManager, auditLogger: AuditLogger): Router {

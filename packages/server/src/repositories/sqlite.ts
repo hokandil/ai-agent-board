@@ -4,6 +4,7 @@ import type { TaskRepository, ContinuationEligibility } from './types.js';
 import type { MCPServerRecord, MCPToolRecord, MCPPermissionRecord, MCPRepository } from './mcp-types.js';
 import type { SyncConnectionRecord, SyncFieldMapping, SyncConflict, SyncState, SyncRepository } from './mcp-sync-types.js';
 import { errorMessage } from '../utils.js';
+import { credentialService } from '../services/credential-service.js';
 
 interface TaskRow {
   id: string;
@@ -416,19 +417,29 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
       last_connected_at: number | null; last_error: string | null;
       created_at: number; updated_at: number;
     }>;
-    return rows.map(row => ({
-      id: row.id, name: row.name, transport: row.transport,
-      command: row.command ?? undefined,
-      args: row.args ? JSON.parse(row.args) : undefined,
-      url: row.url ?? undefined,
-      env: row.env ? JSON.parse(row.env) : undefined,
-      cwd: row.cwd ?? undefined,
-      headers: row.headers ? JSON.parse(row.headers) : undefined,
-      status: row.status as MCPServerRecord['status'],
-      last_connected_at: row.last_connected_at ?? undefined,
-      last_error: row.last_error ?? undefined,
-      created_at: row.created_at, updated_at: row.updated_at,
-    }));
+    return rows.map(row => {
+      const envRaw = row.env ?? '{}';
+      const headersRaw = row.headers ?? '{}';
+      const env = row.env && credentialService.isValueEncrypted(row.env)
+        ? credentialService.decryptCredentials(row.env)
+        : JSON.parse(envRaw);
+      const headers = row.headers && credentialService.isValueEncrypted(row.headers)
+        ? credentialService.decryptCredentials(row.headers)
+        : JSON.parse(headersRaw);
+      return {
+        id: row.id, name: row.name, transport: row.transport,
+        command: row.command ?? undefined,
+        args: row.args ? JSON.parse(row.args) : undefined,
+        url: row.url ?? undefined,
+        env,
+        cwd: row.cwd ?? undefined,
+        headers,
+        status: row.status as MCPServerRecord['status'],
+        last_connected_at: row.last_connected_at ?? undefined,
+        last_error: row.last_error ?? undefined,
+        created_at: row.created_at, updated_at: row.updated_at,
+      };
+    });
   }
 
   async getServerById(id: string): Promise<MCPServerRecord | undefined> {
@@ -440,14 +451,22 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
       created_at: number; updated_at: number;
     } | undefined;
     if (!row) return undefined;
+    const envRaw = row.env ?? '{}';
+    const headersRaw = row.headers ?? '{}';
+    const env = row.env && credentialService.isValueEncrypted(row.env)
+      ? credentialService.decryptCredentials(row.env)
+      : JSON.parse(envRaw);
+    const headers = row.headers && credentialService.isValueEncrypted(row.headers)
+      ? credentialService.decryptCredentials(row.headers)
+      : JSON.parse(headersRaw);
     return {
       id: row.id, name: row.name, transport: row.transport,
       command: row.command ?? undefined,
       args: row.args ? JSON.parse(row.args) : undefined,
       url: row.url ?? undefined,
-      env: row.env ? JSON.parse(row.env) : undefined,
+      env,
       cwd: row.cwd ?? undefined,
-      headers: row.headers ? JSON.parse(row.headers) : undefined,
+      headers,
       status: row.status as MCPServerRecord['status'],
       last_connected_at: row.last_connected_at ?? undefined,
       last_error: row.last_error ?? undefined,
@@ -460,6 +479,8 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
     const record: MCPServerRecord = {
       ...server, created_at: now, updated_at: now,
     };
+    const encryptedEnv = record.env ? credentialService.encryptCredentials(record.env) : null;
+    const encryptedHeaders = record.headers ? credentialService.encryptCredentials(record.headers) : null;
     this.db.prepare(`
       INSERT INTO mcp_servers (id,name,transport,command,args,url,env,cwd,headers,status,last_connected_at,last_error,created_at,updated_at)
       VALUES (@id,@name,@transport,@command,@args,@url,@env,@cwd,@headers,@status,@last_connected_at,@last_error,@created_at,@updated_at)
@@ -468,9 +489,9 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
       command: record.command ?? null,
       args: record.args ? JSON.stringify(record.args) : null,
       url: record.url ?? null,
-      env: record.env ? JSON.stringify(record.env) : '{}',
+      env: encryptedEnv ?? (record.env ? JSON.stringify(record.env) : '{}'),
       cwd: record.cwd ?? null,
-      headers: record.headers ? JSON.stringify(record.headers) : '{}',
+      headers: encryptedHeaders ?? (record.headers ? JSON.stringify(record.headers) : '{}'),
       status: record.status,
       last_connected_at: record.last_connected_at ?? null,
       last_error: record.last_error ?? null,
@@ -484,6 +505,8 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
     if (!existing) return undefined;
     const now = Date.now();
     const merged: MCPServerRecord = { ...existing, ...updates, updated_at: now };
+    const encryptedEnv = merged.env ? credentialService.encryptCredentials(merged.env) : null;
+    const encryptedHeaders = merged.headers ? credentialService.encryptCredentials(merged.headers) : null;
     this.db.prepare(`
       UPDATE mcp_servers SET
         name = @name, transport = @transport, command = @command,
@@ -497,9 +520,9 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
       command: merged.command ?? null,
       args: merged.args ? JSON.stringify(merged.args) : null,
       url: merged.url ?? null,
-      env: merged.env ? JSON.stringify(merged.env) : '{}',
+      env: encryptedEnv ?? (merged.env ? JSON.stringify(merged.env) : '{}'),
       cwd: merged.cwd ?? null,
-      headers: merged.headers ? JSON.stringify(merged.headers) : '{}',
+      headers: encryptedHeaders ?? (merged.headers ? JSON.stringify(merged.headers) : '{}'),
       status: merged.status,
       last_connected_at: merged.last_connected_at ?? null,
       last_error: merged.last_error ?? null,

@@ -5,6 +5,7 @@ import type { MCPServerRecord, MCPToolRecord, MCPPermissionRecord, MCPRepository
 import type { SyncConnectionRecord, SyncFieldMapping, SyncConflict, SyncState, SyncRepository } from './mcp-sync-types.js';
 import { isValidPriority, isValidColumnId, isValidAgentStatus, isValidAgentType } from '@ai-agent-board/shared/constants.js';
 import { errorMessage } from '../utils.js';
+import { credentialService } from '../services/credential-service.js';
 
 interface TaskRow {
   id: string;
@@ -487,33 +488,51 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
 
   async getAllServers(): Promise<MCPServerRecord[]> {
     const { rows } = await this.pool.query('SELECT * FROM mcp_servers ORDER BY created_at ASC');
-    return rows.map((row: any) => ({
-      id: row.id, name: row.name, transport: row.transport,
-      command: row.command ?? undefined,
-      args: row.args ? JSON.parse(row.args) : undefined,
-      url: row.url ?? undefined,
-      env: row.env ? JSON.parse(row.env) : undefined,
-      cwd: row.cwd ?? undefined,
-      headers: row.headers ? JSON.parse(row.headers) : undefined,
-      status: row.status as MCPServerRecord['status'],
-      last_connected_at: row.last_connected_at ?? undefined,
-      last_error: row.last_error ?? undefined,
-      created_at: row.created_at, updated_at: row.updated_at,
-    }));
+    return rows.map((row: any) => {
+      const envRaw = row.env ?? '{}';
+      const headersRaw = row.headers ?? '{}';
+      const env = row.env && credentialService.isValueEncrypted(row.env)
+        ? credentialService.decryptCredentials(row.env)
+        : JSON.parse(envRaw);
+      const headers = row.headers && credentialService.isValueEncrypted(row.headers)
+        ? credentialService.decryptCredentials(row.headers)
+        : JSON.parse(headersRaw);
+      return {
+        id: row.id, name: row.name, transport: row.transport,
+        command: row.command ?? undefined,
+        args: row.args ? JSON.parse(row.args) : undefined,
+        url: row.url ?? undefined,
+        env,
+        cwd: row.cwd ?? undefined,
+        headers,
+        status: row.status as MCPServerRecord['status'],
+        last_connected_at: row.last_connected_at ?? undefined,
+        last_error: row.last_error ?? undefined,
+        created_at: row.created_at, updated_at: row.updated_at,
+      };
+    });
   }
 
   async getServerById(id: string): Promise<MCPServerRecord | undefined> {
     const { rows } = await this.pool.query('SELECT * FROM mcp_servers WHERE id = $1', [id]);
     if (!rows[0]) return undefined;
     const row = rows[0];
+    const envRaw = row.env ?? '{}';
+    const headersRaw = row.headers ?? '{}';
+    const env = row.env && credentialService.isValueEncrypted(row.env)
+      ? credentialService.decryptCredentials(row.env)
+      : JSON.parse(envRaw);
+    const headers = row.headers && credentialService.isValueEncrypted(row.headers)
+      ? credentialService.decryptCredentials(row.headers)
+      : JSON.parse(headersRaw);
     return {
       id: row.id, name: row.name, transport: row.transport,
       command: row.command ?? undefined,
       args: row.args ? JSON.parse(row.args) : undefined,
       url: row.url ?? undefined,
-      env: row.env ? JSON.parse(row.env) : undefined,
+      env,
       cwd: row.cwd ?? undefined,
-      headers: row.headers ? JSON.parse(row.headers) : undefined,
+      headers,
       status: row.status as MCPServerRecord['status'],
       last_connected_at: row.last_connected_at ?? undefined,
       last_error: row.last_error ?? undefined,
@@ -526,13 +545,15 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
     const record: MCPServerRecord = {
       ...server, created_at: now, updated_at: now,
     };
+    const encryptedEnv = record.env ? credentialService.encryptCredentials(record.env) : null;
+    const encryptedHeaders = record.headers ? credentialService.encryptCredentials(record.headers) : null;
     await this.pool.query(`
       INSERT INTO mcp_servers (id,name,transport,command,args,url,env,cwd,headers,status,last_connected_at,last_error,created_at,updated_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
     `, [record.id, record.name, record.transport, record.command ?? null,
       record.args ? JSON.stringify(record.args) : null, record.url ?? null,
-      record.env ? JSON.stringify(record.env) : '{}', record.cwd ?? null,
-      record.headers ? JSON.stringify(record.headers) : '{}', record.status,
+      encryptedEnv ?? (record.env ? JSON.stringify(record.env) : '{}'), record.cwd ?? null,
+      encryptedHeaders ?? (record.headers ? JSON.stringify(record.headers) : '{}'), record.status,
       record.last_connected_at ?? null, record.last_error ?? null,
       record.created_at, record.updated_at]);
     return record;
@@ -543,6 +564,8 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
     if (!existing) return undefined;
     const now = Date.now();
     const merged: MCPServerRecord = { ...existing, ...updates, updated_at: now };
+    const encryptedEnv = merged.env ? credentialService.encryptCredentials(merged.env) : null;
+    const encryptedHeaders = merged.headers ? credentialService.encryptCredentials(merged.headers) : null;
     await this.pool.query(`
       UPDATE mcp_servers SET
         name = $2, transport = $3, command = $4, args = $5, url = $6,
@@ -551,8 +574,8 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
       WHERE id = $1
     `, [merged.id, merged.name, merged.transport, merged.command ?? null,
       merged.args ? JSON.stringify(merged.args) : null, merged.url ?? null,
-      merged.env ? JSON.stringify(merged.env) : '{}', merged.cwd ?? null,
-      merged.headers ? JSON.stringify(merged.headers) : '{}', merged.status,
+      encryptedEnv ?? (merged.env ? JSON.stringify(merged.env) : '{}'), merged.cwd ?? null,
+      encryptedHeaders ?? (merged.headers ? JSON.stringify(merged.headers) : '{}'), merged.status,
       merged.last_connected_at ?? null, merged.last_error ?? null,
       merged.updated_at]);
     return merged;
