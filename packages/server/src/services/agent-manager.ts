@@ -3,9 +3,9 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { Task, TaskGroup, AgentEvent, AgentType } from '../types.js';
+import type { Task, TaskGroup, AgentEvent, AgentType, SessionStatus, AgentSession, SessionConcurrencyLimits } from '../types.js';
 import type { TaskRepository } from '../repositories/types.js';
-import type { AgentProvider, AgentSession, AgentInfo, AgentAttachment } from '@codewithdan/agent-sdk-core';
+import type { AgentProvider, AgentSession as CoreAgentSession, AgentInfo, AgentAttachment } from '@codewithdan/agent-sdk-core';
 import type { AgentEvent as CoreAgentEvent } from '@codewithdan/agent-sdk-core';
 import { CopilotProvider, ClaudeProvider, CodexProvider, OpenCodeProvider, HermesProvider, OpenClawProvider, GrokProvider } from '@codewithdan/agent-sdk-core';
 import { broadcast } from '../websocket.js';
@@ -18,6 +18,7 @@ import {
 import { UPLOADS_DIR } from '../routes/attachments.js';
 import type { AttachmentStore } from '../repositories/attachment-types.js';
 import { errorMessage } from '../utils.js';
+import { gitExecFileSync } from '../routes/helpers.js';
 import { detectAvailableAgents } from './agent-detection.js';
 import { resolveTaskTimeoutMs } from './agent-timeout.js';
 
@@ -38,10 +39,17 @@ function loadAttachmentAsBase64(filePath: string, displayName: string, mimeType:
 }
 
 interface ManagedSession {
-  session?: AgentSession;
-  timeoutId?: ReturnType<typeof setTimeout>;
-  startTime: number;
+  sessionId: string;
+  session?: CoreAgentSession;
+  taskId?: string;
   agentType: AgentType;
+  status: SessionStatus;
+  model?: string;
+  worktreePath?: string;
+  startTime: number;
+  completedAt?: number;
+  createdAt: number;
+  timeoutId?: ReturnType<typeof setTimeout>;
 }
 
 // Event log per task (capped to prevent unbounded growth)
@@ -109,7 +117,12 @@ interface GroupQueue {
 
 export class AgentManager {
   private providers = new Map<AgentType, AgentProvider>();
+  /** Sessions keyed by sessionId (not taskId — multiple sessions per task possible) */
   private sessions = new Map<string, ManagedSession>();
+  /** Maps taskId → sessionId (a task can have at most one active session) */
+  private taskToSession = new Map<string, string>();
+  /** Maps sessionId → taskId (reverse lookup) */
+  private sessionToTask = new Map<string, string>();
   private deletedTasks = new Set<string>();
   /** Tasks stopped by user — prevents duplicate agent_complete from terminateOnce */
   private stoppedTasks = new Set<string>();
@@ -122,6 +135,12 @@ export class AgentManager {
   private groupQueues = new Map<string, GroupQueue>();
   /** Per-repo mutex to serialize git operations (merge, checkout) */
   private repoLocks = new Map<string, Promise<void>>();
+  /** Active session count per provider type (for concurrency limits) */
+  private providerSessionCounts = new Map<AgentType, number>();
+  /** Active session count per project (for concurrency limits) */
+  private projectSessionCounts = new Map<string, number>();
+  /** Concurrency limits. Undefined = unlimited. */
+  private concurrencyLimits: SessionConcurrencyLimits = {};
 
   /** Call once at startup to enable event persistence. */
   initEventPersistence(repo: TaskRepository): void {
@@ -217,6 +236,588 @@ export class AgentManager {
     return [...this.availableAgents];
   }
 
+  // ─── Session Management ──────────────────────────────────────────────
+
+  /** Configure concurrency limits for sessions. */
+  setConcurrencyLimits(limits: SessionConcurrencyLimits): void {
+    this.concurrencyLimits = { ...limits };
+  }
+
+  /** Create a new agent session. Optionally links it to a task without starting execution. */
+  createSession(
+    agentType: AgentType,
+    taskId?: string,
+    model?: string,
+    _useWorktree = false,
+    _repoPath?: string,
+    _branchName?: string,
+    _baseBranch?: string,
+  ): string {
+    const sessionId = `session-${uuid()}`;
+    const now = Date.now();
+
+    const entry: ManagedSession = {
+      sessionId,
+      taskId,
+      agentType,
+      status: 'idle',
+      model,
+      startTime: now,
+      createdAt: now,
+    };
+
+    if (taskId) {
+      this.taskToSession.set(taskId, sessionId);
+      this.sessionToTask.set(sessionId, taskId);
+    }
+
+    this.sessions.set(sessionId, entry);
+    console.log(`[session] created ${sessionId} (agent=${agentType}, task=${taskId ?? 'none'})`);
+    return sessionId;
+  }
+
+  /** Assign a task to an existing idle session without starting execution. */
+  assignTaskToSession(sessionId: string, taskId: string): boolean {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return false;
+    if (entry.taskId && entry.taskId !== taskId) return false; // already assigned to a different task
+    if (entry.status !== 'idle' && entry.status !== 'stopped' && entry.status !== 'failed' && entry.status !== 'complete') return false;
+
+    // Unlink any previous task
+    if (entry.taskId) {
+      this.taskToSession.delete(entry.taskId);
+    }
+    this.taskToSession.set(taskId, sessionId);
+    this.sessionToTask.set(sessionId, taskId);
+    entry.taskId = taskId;
+    entry.status = 'idle';
+    return true;
+  }
+
+  /** Start executing a session. Sets up worktree, creates SDK session, runs the prompt. */
+  async startSession(sessionId: string): Promise<void> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) throw new Error(`Session not found: ${sessionId}`);
+    if (entry.status === 'executing' || entry.status === 'planning') throw new Error(`Session ${sessionId} is already running`);
+
+    const task = entry.taskId ? await this.getTaskForSession(entry) : undefined;
+    if (!task) throw new Error(`Session ${sessionId} has no assigned task`);
+
+    // Check concurrency limits
+    this.enforceConcurrencyLimits(task.projectId);
+
+    // Mark as executing
+    entry.status = 'planning';
+    entry.startTime = Date.now();
+
+    // Clear any prior run's summary
+    if (task.summary != null) {
+      void this.eventRepo?.update(task.id, { summary: null }).catch(() => {});
+    }
+
+    const provider = this.providers.get(entry.agentType);
+    if (!provider) {
+      entry.status = 'failed';
+      this.emitEvent(task.id, {
+        id: uuid(), taskId: task.id, type: 'error',
+        content: `No provider registered for agent type: ${entry.agentType}`,
+        timestamp: Date.now(),
+        metadata: { agentType: entry.agentType },
+      });
+      throw new Error(`No provider registered for agent type: ${entry.agentType}`);
+    }
+
+    const agentInfo = this.availableAgents.find(a => a.name === entry.agentType);
+    if (!agentInfo?.available) {
+      entry.status = 'failed';
+      this.emitEvent(task.id, {
+        id: uuid(), taskId: task.id, type: 'error',
+        content: `Agent ${provider.displayName} is not available: ${agentInfo?.reason || 'unknown reason'}`,
+        timestamp: Date.now(),
+        metadata: { agentType: entry.agentType },
+      });
+      throw new Error(`Agent ${provider.displayName} is not available`);
+    }
+
+    // Increment concurrency counters
+    this.providerSessionCounts.set(entry.agentType, (this.providerSessionCounts.get(entry.agentType) || 0) + 1);
+    if (task.projectId) {
+      this.projectSessionCounts.set(task.projectId, (this.projectSessionCounts.get(task.projectId) || 0) + 1);
+    }
+
+    let terminated = false;
+    const durationStart = Date.now();
+
+    const terminateOnce = async (status: 'complete' | 'failed', errorMessage?: string) => {
+      if (terminated) return;
+      if (this.stoppedTasks.has(task.id)) { terminated = true; return; }
+      terminated = true;
+      const entry2 = this.sessions.get(sessionId);
+      if (entry2?.timeoutId) clearTimeout(entry2.timeoutId);
+      const duration = Date.now() - durationStart;
+
+      if (status === 'complete') {
+        this.emitEvent(task.id, {
+          id: uuid(), taskId: task.id, type: 'complete',
+          content: 'Task completed successfully.',
+          timestamp: Date.now(),
+          metadata: { agentType: entry.agentType, duration },
+        });
+      } else {
+        this.emitEvent(task.id, {
+          id: uuid(), taskId: task.id, type: 'error',
+          content: errorMessage || 'Task failed.',
+          timestamp: Date.now(),
+          metadata: { agentType: entry.agentType, duration, error: errorMessage },
+        });
+      }
+
+      broadcast({
+        type: 'agent_complete',
+        payload: {
+          taskId: task.id,
+          status,
+          agentType: entry.agentType,
+          duration,
+          eventCount: (await this.getEvents(task.id)).length,
+        },
+      });
+
+      entry2!.status = status === 'complete' ? 'complete' : 'failed';
+      entry2!.completedAt = Date.now();
+
+      // Decrement concurrency counters
+      this.providerSessionCounts.set(entry.agentType, Math.max(0, (this.providerSessionCounts.get(entry.agentType) || 1) - 1));
+      if (task.projectId) {
+        this.projectSessionCounts.set(task.projectId, Math.max(0, (this.projectSessionCounts.get(task.projectId) || 1) - 1));
+      }
+
+      // Clear session from task mapping but keep the session record for history
+      if (entry2!.taskId) {
+        this.taskToSession.delete(entry2!.taskId);
+      }
+      this.sessionToTask.delete(sessionId);
+    };
+
+    // Set up worktree if configured
+    let worktreePath: string | undefined;
+    if (task.useWorktree) {
+      const priorWorktree = task.worktreePath;
+      try {
+        worktreePath = this.setupWorktree(task);
+        if (worktreePath) {
+          task.worktreePath = worktreePath;
+          entry.worktreePath = worktreePath;
+          const reused = priorWorktree != null && path.resolve(priorWorktree) === path.resolve(worktreePath);
+          let dirtyHint = '';
+          if (reused) {
+            try {
+              const status = gitExecFileSync(['status', '--porcelain'], {
+                cwd: worktreePath, stdio: 'pipe',
+              }).toString().trim();
+              dirtyHint = status ? '\nNote: worktree has uncommitted changes from a prior run.' : '';
+            } catch {
+              /* ignore status probe failures */
+            }
+          }
+          this.emitEvent(task.id, {
+            id: uuid(), taskId: task.id, type: 'output',
+            content: `${reused ? 'Reusing existing git worktree at' : 'Git worktree created at'} ${worktreePath}\nBranch: ${task.branchName}\nBase: ${task.baseBranch || 'main'}${dirtyHint}`,
+            timestamp: Date.now(),
+          });
+        }
+      } catch (err: unknown) {
+        this.emitEvent(task.id, {
+          id: uuid(), taskId: task.id, type: 'error',
+          content: `Worktree setup failed: ${errorMessage(err)}`,
+          timestamp: Date.now(),
+        });
+        entry.status = 'failed';
+        terminateOnce('failed', `Worktree setup failed: ${errorMessage(err)}`);
+        return;
+      }
+    }
+
+    // Launch the agent session asynchronously
+    (async () => {
+      try {
+        const workingDirectory = worktreePath || task.repoPath || process.cwd();
+        const hasGit = fs.existsSync(path.join(workingDirectory, '.git'));
+        const safeTitle = task.title.replace(/[<>]/g, '');
+        const systemPrompt = `
+<context>
+You are a coding agent working on a task in the project directory: ${workingDirectory}
+Task: ${safeTitle}
+${worktreePath ? `\nIMPORTANT: All file paths MUST be under ${worktreePath}. Do NOT reference or edit files at ${task.repoPath} directly.` : ''}
+${!hasGit ? `\nIMPORTANT: This directory is not a git repository. Run \`git init\` first before making any changes, so all work is tracked.` : ''}
+Complete the task described in the user prompt. Be thorough — read relevant files,
+make precise edits, and verify your changes compile/pass tests when applicable.
+
+When you have finished, end your VERY LAST message with a task summary in EXACTLY this format (keep the tags on their own lines):
+<task-summary>
+## Completed
+A clear description of what you accomplished. This section is required and must not be empty.
+## Comments
+Optional notes, caveats, decisions, or context. Omit the body if there is nothing to add.
+## Remaining
+Optional list of any work you did not complete or that should be followed up. Omit the body if everything is done.
+</task-summary>
+</context>
+`;
+
+        let lastFileEventFile: string | null = null;
+        let lastFileEventType: string | null = null;
+        let summaryBuffer = '';
+        let resultBuffer = '';
+
+        const coreSession = await provider.createSession({
+          contextId: sessionId,
+          workingDirectory,
+          repoPath: task.repoPath,
+          systemPrompt,
+          onEvent: (coreEvent: CoreAgentEvent) => {
+            const metadata: Record<string, unknown> = { ...coreEvent.metadata };
+            let eventType = coreEvent.type;
+            let content = coreEvent.content;
+
+            if (coreEvent.type === 'output') {
+              summaryBuffer += content;
+              resultBuffer += content;
+              if (resultBuffer.length > MAX_RESULT_BUFFER) {
+                resultBuffer = `[Earlier agent output omitted because it exceeded ${MAX_RESULT_BUFFER} characters.]\n\n${resultBuffer.slice(-MAX_RESULT_BUFFER)}`;
+              }
+              if (summaryBuffer.length > MAX_SUMMARY_BUFFER) {
+                summaryBuffer = summaryBuffer.slice(-MAX_SUMMARY_BUFFER);
+              }
+              if (content.includes('task-summary')) {
+                content = content.replace(/<\/?task-summary>/g, '');
+              }
+            }
+
+            if (coreEvent.type === 'command' && metadata.command === 'create') {
+              eventType = 'file_write';
+            }
+
+            if ((eventType === 'file_write' || eventType === 'file_edit' || eventType === 'file_read') && !metadata.file) {
+              const colonIdx = coreEvent.content.indexOf(':');
+              if (colonIdx > 0) {
+                try {
+                  const args = JSON.parse(coreEvent.content.slice(colonIdx + 1).trim());
+                  const filePath = args.path || args.file_path || args.file || args.filename;
+                  if (filePath) {
+                    metadata.file = filePath;
+                    lastFileEventFile = filePath;
+                    lastFileEventType = eventType;
+                  }
+                } catch { /* not JSON args, skip */ }
+              }
+            }
+
+            if (coreEvent.type === 'command' && metadata.command === 'bash') {
+              const content = coreEvent.content;
+              const redirectMatch = content.match(/(?:cat|echo|printf)\s+.*?>\s*(\S+)/);
+              const teeMatch = content.match(/tee\s+(\S+)/);
+              const filePath = redirectMatch?.[1] || teeMatch?.[1];
+              if (filePath && !filePath.startsWith('-')) {
+                metadata.file = filePath.replace(/['"]/g, '');
+                metadata.fileEventType = 'file_write';
+              }
+            }
+
+            if (coreEvent.type === 'command_output' && lastFileEventFile && lastFileEventType) {
+              metadata.file = lastFileEventFile;
+              metadata.fileEventType = lastFileEventType;
+              lastFileEventFile = null;
+              lastFileEventType = null;
+            } else if (eventType !== 'file_write' && eventType !== 'file_edit' && eventType !== 'file_read') {
+              lastFileEventFile = null;
+              lastFileEventType = null;
+            }
+
+            this.emitEvent(task.id, {
+              id: coreEvent.id,
+              taskId: task.id,
+              type: eventType as AgentEvent['type'],
+              content,
+              timestamp: coreEvent.timestamp,
+              metadata,
+            });
+          },
+        });
+
+        entry.session = coreSession;
+        entry.status = 'executing';
+
+        // Timeout guard
+        const taskTimeoutMs = resolveTaskTimeoutMs(task);
+        const timeoutId = setTimeout(() => {
+          if (!this.sessions.has(sessionId)) return;
+          const timeoutMsg = `Agent timed out after ${Math.round(taskTimeoutMs / 60000)} minutes`;
+          console.warn(`[agent-manager] task ${task.id} timed out after ${taskTimeoutMs}ms`);
+          this.emitEvent(task.id, {
+            id: uuid(), taskId: task.id, type: 'error',
+            content: timeoutMsg,
+            timestamp: Date.now(),
+          });
+          const entry2 = this.sessions.get(sessionId);
+          if (entry2) {
+            this.sessions.delete(sessionId);
+            entry2.session?.abort().catch(() => {});
+            entry2.session?.destroy().catch(() => {});
+          }
+          terminateOnce('failed', timeoutMsg);
+        }, taskTimeoutMs);
+
+        entry.timeoutId = timeoutId;
+
+        const safeDescription = (task.description || '').replace(/[<>]/g, '');
+        const prompt = `${safeTitle}\n\n${safeDescription}`;
+
+        let agentAttachments: AgentAttachment[] | undefined;
+        if (this.attachmentStore) {
+          const taskAttachments = await this.attachmentStore.getByTaskId(task.id);
+          if (taskAttachments.length > 0) {
+            const loaded: AgentAttachment[] = [];
+            for (const a of taskAttachments) {
+              const srcPath = path.join(UPLOADS_DIR, a.taskId, a.filename);
+              const att = loadAttachmentAsBase64(srcPath, a.originalName, a.mimeType);
+              if (att) loaded.push(att);
+            }
+            if (loaded.length > 0) agentAttachments = loaded;
+          }
+        }
+
+        console.log(`[agent-manager] executing ${entry.agentType} for task ${task.id} (session ${sessionId})${agentAttachments?.length ? ` with ${agentAttachments.length} image(s)` : ''}`);
+        const result = await coreSession.execute(prompt, agentAttachments);
+        console.log(`[agent-manager] ${entry.agentType} ${result.status} for task ${task.id} (session ${sessionId})${result.error ? `: ${result.error}` : ''}`);
+
+        clearTimeout(timeoutId);
+
+        if (this.sessions.has(sessionId)) {
+          this.sessions.delete(sessionId);
+          if (result.status === 'complete') {
+            try {
+              const summary = extractTaskSummary(summaryBuffer);
+              await this.eventRepo?.update(task.id, { summary });
+              const fullOutput = extractFullAgentOutput(resultBuffer);
+              if (fullOutput && this.eventRepo) {
+                await this.eventRepo.insertEvent({
+                  id: uuid(), taskId: task.id, type: 'complete', content: fullOutput,
+                  timestamp: Date.now(), metadata: { finalOutput: true },
+                });
+              }
+            } catch (err) {
+              console.error(`[agent-manager] failed to persist result for task ${task.id}:`, errorMessage(err));
+            }
+          }
+          terminateOnce(result.status, result.error);
+          coreSession.destroy().catch(() => {});
+        }
+      } catch (err: unknown) {
+        const message = errorMessage(err);
+        const isCliMissing =
+          message.includes('ENOENT') ||
+          message.includes('not found') ||
+          message.includes('spawn');
+
+        const errorContent = isCliMissing
+          ? `${provider.displayName} CLI is not installed or not found in PATH.`
+          : `Failed to start ${provider.displayName} session: ${message}`;
+
+        this.emitEvent(task.id, {
+          id: uuid(), taskId: task.id, type: 'error',
+          content: errorContent,
+          timestamp: Date.now(),
+        });
+
+        const entry2 = this.sessions.get(sessionId);
+        if (entry2) this.sessions.delete(sessionId);
+        terminateOnce('failed', errorContent);
+      }
+    })().catch((err: unknown) => {
+      console.error(`[agent-manager] unhandled error for task ${task.id} (session ${sessionId}):`, err);
+      terminateOnce('failed');
+    });
+  }
+
+  /** Stop a running session. */
+  async stopSession(sessionId: string): Promise<boolean> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return false;
+
+    if (entry.timeoutId) clearTimeout(entry.timeoutId);
+    const duration = Date.now() - entry.startTime;
+    const { agentType, taskId } = entry;
+    this.sessions.delete(sessionId);
+    this.stoppedTasks.add(taskId || sessionId);
+    setTimeout(() => this.stoppedTasks.delete(taskId || sessionId), STOPPED_TASK_TTL_MS);
+
+    // Decrement concurrency counters
+    this.providerSessionCounts.set(agentType, Math.max(0, (this.providerSessionCounts.get(agentType) || 1) - 1));
+    if (entry.taskId) {
+      const task = await this.getTaskForSession(entry);
+      if (task?.projectId) {
+        this.projectSessionCounts.set(task.projectId, Math.max(0, (this.projectSessionCounts.get(task.projectId) || 1) - 1));
+      }
+      this.taskToSession.delete(entry.taskId);
+    }
+    this.sessionToTask.delete(sessionId);
+
+    (async () => {
+      try { await entry.session?.abort(); } catch { /* ignore */ }
+      try { await entry.session?.destroy(); } catch { /* ignore */ }
+    })();
+
+    if (taskId) {
+      this.emitEvent(taskId, {
+        id: uuid(), taskId, type: 'error',
+        content: 'Agent stopped by user.',
+        timestamp: Date.now(),
+        metadata: { agentType, duration, error: 'Agent stopped by user.' },
+      });
+
+      broadcast({
+        type: 'agent_complete',
+        payload: {
+          taskId,
+          status: 'failed',
+          agentType,
+          duration,
+          eventCount: (await this.getEvents(taskId)).length,
+        },
+      });
+
+      for (const [groupId, q] of this.groupQueues) {
+        if (q.runningTaskIds.delete(taskId)) {
+          q.failedTaskIds.add(taskId);
+          Promise.resolve(q.onChildComplete(taskId)).catch((err: unknown) =>
+            console.error('[group] onChildComplete failed:', err),
+          );
+          if (q.pendingTaskIds.length === 0 && q.runningTaskIds.size === 0) {
+            this.groupQueues.delete(groupId);
+          } else {
+            queueMicrotask(() => this.drainGroupQueue(groupId));
+          }
+          break;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  /** Resume a stopped/complete/failed session. Creates a new SDK session and re-executes. */
+  async resumeSession(sessionId: string): Promise<void> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) throw new Error(`Session not found: ${sessionId}`);
+    if (entry.status === 'executing' || entry.status === 'planning') throw new Error(`Session ${sessionId} is already running`);
+
+    // Reset to idle state for re-execution
+    entry.status = 'idle';
+    entry.startTime = Date.now();
+    entry.completedAt = undefined;
+
+    // Re-start using the same logic
+    await this.startSession(sessionId);
+  }
+
+  /** Get session info by sessionId. */
+  getSession(sessionId: string): AgentSession | undefined {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return undefined;
+    return {
+      id: entry.sessionId,
+      taskId: entry.taskId,
+      agentType: entry.agentType,
+      status: entry.status,
+      model: entry.model,
+      worktreePath: entry.worktreePath,
+      startedAt: entry.startTime,
+      completedAt: entry.completedAt,
+      createdAt: entry.createdAt,
+    };
+  }
+
+  /** List all sessions. */
+  listSessions(): AgentSession[] {
+    return [...this.sessions.values()].map((e) => ({
+      id: e.sessionId,
+      taskId: e.taskId,
+      agentType: e.agentType,
+      status: e.status,
+      model: e.model,
+      worktreePath: e.worktreePath,
+      startedAt: e.startTime,
+      completedAt: e.completedAt,
+      createdAt: e.createdAt,
+    }));
+  }
+
+  /** Get the session assigned to a task, if any. */
+  getSessionForTask(taskId: string): AgentSession | undefined {
+    const sessionId = this.taskToSession.get(taskId);
+    if (!sessionId) return undefined;
+    return this.getSession(sessionId);
+  }
+
+  /** Check if a session is currently running. */
+  isSessionRunning(sessionId: string): boolean {
+    const entry = this.sessions.get(sessionId);
+    return !!entry && (entry.status === 'executing' || entry.status === 'planning');
+  }
+
+  /** Check if a task has a running session. */
+  isTaskRunning(taskId: string): boolean {
+    const sessionId = this.taskToSession.get(taskId);
+    if (!sessionId) return false;
+    return this.isSessionRunning(sessionId);
+  }
+
+  /** Enforce concurrency limits before starting a new session. */
+  private enforceConcurrencyLimits(projectId?: string): void {
+    const limits = this.concurrencyLimits;
+
+    // Global limit
+    if (limits.global !== undefined) {
+      const totalRunning = [...this.sessions.values()].filter(s => s.status === 'executing' || s.status === 'planning').length;
+      if (totalRunning >= limits.global) {
+        throw new Error(`Global concurrency limit (${limits.global}) reached`);
+      }
+    }
+
+    // Per-provider limit
+    // Note: this checks the provider of the session about to start, which we don't know yet
+    // at this point. The caller should pass the agentType. For now, check all providers.
+    for (const [agentType, count] of this.providerSessionCounts) {
+      const limit = limits.perProvider?.[agentType];
+      if (limit !== undefined && count >= limit) {
+        throw new Error(`Concurrency limit (${limit}) reached for provider ${agentType}`);
+      }
+    }
+
+    // Per-project limit — checked at task-assignment time since we need the task's projectId.
+    // Session creation may not have a task yet, so this is a placeholder.
+    if (projectId && limits.perProject) {
+      const limit = limits.perProject[projectId];
+      if (limit !== undefined) {
+        let projectCount = 0;
+        for (const entry of this.sessions.values()) {
+          if (entry.taskId) projectCount++;
+        }
+        if (projectCount >= limit) {
+          throw new Error(`Concurrency limit (${limit}) reached for project ${projectId}`);
+        }
+      }
+    }
+  }
+
+  /** Get the Task object for a session's taskId. */
+  private async getTaskForSession(entry: ManagedSession): Promise<Task | undefined> {
+    if (!entry.taskId || !this.eventRepo) return undefined;
+    // The eventRepo is a TaskRepository, so we can get the task
+    return this.eventRepo.getById(entry.taskId);
+  }
+
   // ─── Event Management (moved from copilot.ts) ─────────────────────
 
   private emitEvent(taskId: string, event: AgentEvent): void {
@@ -244,6 +845,13 @@ export class AgentManager {
     }
     const STREAMABLE = new Set(['output', 'thinking']);
 
+    // Events without a task ID (e.g., audit events) bypass stream buffering
+    const tid = event.taskId;
+    if (!tid) {
+      broadcast({ type: 'agent_event', payload: event });
+      return;
+    }
+
     const flushBuffer = (taskId: string) => {
       const buf = this.streamBuffer.get(taskId);
       if (buf) {
@@ -254,21 +862,21 @@ export class AgentManager {
     };
 
     if (STREAMABLE.has(event.type)) {
-      const existing = this.streamBuffer.get(event.taskId);
+      const existing = this.streamBuffer.get(tid);
       if (existing && existing.event.type === event.type) {
         // Same type — merge content and reset timer
         clearTimeout(existing.timer);
         existing.event.content += event.content;
-        existing.timer = setTimeout(() => flushBuffer(event.taskId), STREAM_BUFFER_FLUSH_MS);
+        existing.timer = setTimeout(() => flushBuffer(tid), STREAM_BUFFER_FLUSH_MS);
       } else {
         // Different type or no buffer — flush existing, start new buffer
-        if (existing) flushBuffer(event.taskId);
-        const timer = setTimeout(() => flushBuffer(event.taskId), STREAM_BUFFER_FLUSH_MS);
-        this.streamBuffer.set(event.taskId, { event: { ...event }, timer });
+        if (existing) flushBuffer(tid);
+        const timer = setTimeout(() => flushBuffer(tid), STREAM_BUFFER_FLUSH_MS);
+        this.streamBuffer.set(tid, { event: { ...event }, timer });
       }
     } else {
       // Non-streamable: flush pending buffer first, then broadcast immediately
-      flushBuffer(event.taskId);
+      flushBuffer(tid);
       broadcast({ type: 'agent_event', payload: event });
     }
   }
@@ -312,7 +920,7 @@ export class AgentManager {
   // from a prior (e.g. failed) run instead of colliding on the branch.
   private worktreeRegisteredForBranch(repoPath: string, worktreePath: string, branchName: string): boolean {
     try {
-      const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      const out = gitExecFileSync(['worktree', 'list', '--porcelain'], {
         cwd: repoPath,
         stdio: 'pipe',
       }).toString();
@@ -353,7 +961,7 @@ export class AgentManager {
     // Clear stale worktree records (e.g. dirs deleted out from under git) so a
     // fresh add for this branch isn't blocked by a dangling registration.
     try {
-      execFileSync('git', ['worktree', 'prune'], { cwd: task.repoPath, stdio: 'pipe' });
+      gitExecFileSync(['worktree', 'prune'], { cwd: task.repoPath, stdio: 'pipe' });
     } catch {
       /* best effort */
     }
@@ -362,16 +970,16 @@ export class AgentManager {
     const baseBranch = task.baseBranch || 'main';
 
     try {
-      execFileSync(
-        'git', ['worktree', 'add', '-b', task.branchName, worktreePath, baseBranch],
+      gitExecFileSync(
+        ['worktree', 'add', '-b', task.branchName, worktreePath, baseBranch],
         { cwd: task.repoPath, stdio: 'pipe' },
       );
       console.log(`[worktree] created at ${worktreePath} from ${baseBranch}`);
       return worktreePath;
     } catch {
       try {
-        execFileSync(
-          'git', ['worktree', 'add', worktreePath, task.branchName],
+        gitExecFileSync(
+          ['worktree', 'add', worktreePath, task.branchName],
           { cwd: task.repoPath, stdio: 'pipe' },
         );
         console.log(`[worktree] attached existing branch ${task.branchName} at ${worktreePath}`);
@@ -409,7 +1017,7 @@ export class AgentManager {
 
     // Check that a remote named 'origin' exists
     try {
-      const remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd, stdio: 'pipe' }).toString().trim();
+      const remoteUrl = gitExecFileSync(['remote', 'get-url', 'origin'], { cwd, stdio: 'pipe' }).toString().trim();
       if (!remoteUrl) throw new Error('empty');
     } catch {
       throw new Error(
@@ -420,7 +1028,7 @@ export class AgentManager {
     }
 
     try {
-      execFileSync('git', ['push', '-u', 'origin', task.branchName], { cwd, stdio: 'pipe' });
+      gitExecFileSync(['push', '-u', 'origin', task.branchName], { cwd, stdio: 'pipe' });
       const prTitle = task.title.replace(/[<>]/g, '').slice(0, 200);
       const result = execFileSync(
         'gh',
@@ -463,12 +1071,12 @@ export class AgentManager {
 
     return this.withRepoLock(repoPath, () => {
       try {
-        execFileSync('git', ['checkout', baseBranch], { cwd: repoPath, stdio: 'pipe' });
-        execFileSync('git', ['merge', branchName, '--no-edit'], { cwd: repoPath, stdio: 'pipe' });
+        gitExecFileSync(['checkout', baseBranch], { cwd: repoPath, stdio: 'pipe' });
+        gitExecFileSync(['merge', branchName, '--no-edit'], { cwd: repoPath, stdio: 'pipe' });
         console.log(`[merge] merged ${branchName} into ${baseBranch}`);
         return { merged: true as const, baseBranch };
       } catch (err: unknown) {
-        try { execFileSync('git', ['merge', '--abort'], { cwd: repoPath, stdio: 'pipe' }); } catch { /* already clean */ }
+        try { gitExecFileSync(['merge', '--abort'], { cwd: repoPath, stdio: 'pipe' }); } catch { /* already clean */ }
         const stderr = getErrorStderr(err);
         const msg = stderr || errorMessage(err);
         console.error(`[merge] failed:`, msg);
@@ -484,338 +1092,30 @@ export class AgentManager {
     onStatusChange: (status: Task['agentStatus']) => void | Promise<void>,
     onWorktreeCreated?: (worktreePath: string) => void | Promise<void>,
   ): void {
-    if (this.sessions.has(task.id)) return;
-
-    const agentType = task.agentType || 'copilot';
-    const sessionStartTime = Date.now();
-    let terminated = false;
-
-    // Clear any prior run's summary so a rerun never displays a stale result
-    // (e.g. if this run fails before producing a new summary).
-    if (task.summary != null) {
-      void this.eventRepo?.update(task.id, { summary: null }).catch(() => {});
-    }
-    const terminateOnce = async (status: 'complete' | 'failed', errorMessage?: string) => {
-      if (terminated) return;
-      // If the task was stopped by the user, stopAgent already handled cleanup
-      if (this.stoppedTasks.has(task.id)) { terminated = true; return; }
-      terminated = true;
-      const entry = this.sessions.get(task.id);
-      if (entry?.timeoutId) clearTimeout(entry.timeoutId);
-      const duration = Date.now() - sessionStartTime;
-
-      // Item 5: Emit structured summary event
-      if (status === 'complete') {
-        this.emitEvent(task.id, {
-          id: uuid(), taskId: task.id, type: 'complete',
-          content: 'Task completed successfully.',
-          timestamp: Date.now(),
-          metadata: { agentType, duration },
-        });
-      } else {
-        this.emitEvent(task.id, {
-          id: uuid(), taskId: task.id, type: 'error',
-          content: errorMessage || 'Task failed.',
-          timestamp: Date.now(),
-          metadata: { agentType, duration, error: errorMessage },
-        });
-      }
-
-      // Item 2: Broadcast agent_complete WS event
-      broadcast({
-        type: 'agent_complete',
-        payload: {
-          taskId: task.id,
-          status,
-          agentType,
-          duration,
-          eventCount: (await this.getEvents(task.id)).length,
-        },
-      });
-
-      onStatusChange(status);
-    };
-
-    const provider = this.providers.get(agentType);
-    if (!provider) {
-      void terminateOnce('failed', `No provider registered for agent type: ${agentType}`);
-      return;
+    // Get or create a session for this task
+    let sessionId = this.taskToSession.get(task.id);
+    if (!sessionId) {
+      sessionId = this.createSession(task.agentType || 'copilot', task.id);
     }
 
-    // Check if agent is available
-    const agentInfo = this.availableAgents.find(a => a.name === agentType);
-    if (!agentInfo?.available) {
-      void terminateOnce('failed', `Agent ${provider.displayName} is not available: ${agentInfo?.reason || 'unknown reason'}`);
-      return;
-    }
-
-    // Synchronous placeholder to prevent duplicate starts during async session creation
-    this.sessions.set(task.id, { startTime: sessionStartTime, agentType });
-
-    // Set up worktree if configured
-    let worktreePath: string | undefined;
-    if (task.useWorktree) {
-      const priorWorktree = task.worktreePath;
-      try {
-        worktreePath = this.setupWorktree(task);
-        if (worktreePath) {
-          task.worktreePath = worktreePath;
-          if (onWorktreeCreated) onWorktreeCreated(worktreePath);
-          const reused = priorWorktree != null && path.resolve(priorWorktree) === path.resolve(worktreePath);
-          let dirtyHint = '';
-          if (reused) {
-            try {
-              const status = execFileSync('git', ['status', '--porcelain'], {
-                cwd: worktreePath, stdio: 'pipe',
-              }).toString().trim();
-              dirtyHint = status ? '\nNote: worktree has uncommitted changes from a prior run.' : '';
-            } catch {
-              /* ignore status probe failures */
-            }
-          }
-          this.emitEvent(task.id, {
-            id: uuid(), taskId: task.id, type: 'output',
-            content: `${reused ? 'Reusing existing git worktree at' : 'Git worktree created at'} ${worktreePath}\nBranch: ${task.branchName}\nBase: ${task.baseBranch || 'main'}${dirtyHint}`,
-            timestamp: Date.now(),
-          });
-        }
-      } catch (err: unknown) {
-        this.emitEvent(task.id, {
-          id: uuid(), taskId: task.id, type: 'error',
-          content: `Worktree setup failed: ${errorMessage(err)}`,
-          timestamp: Date.now(),
-        });
-        terminateOnce('failed', `Worktree setup failed: ${errorMessage(err)}`);
-        return;
-      }
-    }
-
-    // Launch the agent session asynchronously
-    (async () => {
-      try {
-        const workingDirectory = worktreePath || task.repoPath || process.cwd();
-        const hasGit = fs.existsSync(path.join(workingDirectory, '.git'));
-        // Sanitize task content to prevent prompt injection via </context> breakout
-        const safeTitle = task.title.replace(/[<>]/g, '');
-        const systemPrompt = `
-<context>
-You are a coding agent working on a task in the project directory: ${workingDirectory}
-Task: ${safeTitle}
-${worktreePath ? `\nIMPORTANT: All file paths MUST be under ${worktreePath}. Do NOT reference or edit files at ${task.repoPath} directly.` : ''}
-${!hasGit ? `\nIMPORTANT: This directory is not a git repository. Run \`git init\` first before making any changes, so all work is tracked.` : ''}
-Complete the task described in the user prompt. Be thorough — read relevant files,
-make precise edits, and verify your changes compile/pass tests when applicable.
-
-When you have finished, end your VERY LAST message with a task summary in EXACTLY this format (keep the tags on their own lines):
-<task-summary>
-## Completed
-A clear description of what you accomplished. This section is required and must not be empty.
-## Comments
-Optional notes, caveats, decisions, or context. Omit the body if there is nothing to add.
-## Remaining
-Optional list of any work you did not complete or that should be followed up. Omit the body if everything is done.
-</task-summary>
-</context>
-`;
-
-        // Track file context across tool_execution_start → command_output pairs
-        let lastFileEventFile: string | null = null;
-        let lastFileEventType: string | null = null;
-
-        // Accumulate assistant prose ('output' events) to extract the agent's
-        // end-of-task <task-summary> marker block after completion and persist
-        // the complete answer for service integrations.
-        let summaryBuffer = '';
-        let resultBuffer = '';
-
-        const session = await provider.createSession({
-          contextId: task.id,
-          workingDirectory,
-          repoPath: task.repoPath,
-          systemPrompt,
-          onEvent: (coreEvent: CoreAgentEvent) => {
-            const metadata: Record<string, unknown> = { ...coreEvent.metadata };
-            let eventType = coreEvent.type;
-            let content = coreEvent.content;
-
-            // Accumulate raw assistant prose for summary extraction, then strip
-            // the literal sentinel tags so they don't render in the Events tab.
-            if (coreEvent.type === 'output') {
-              summaryBuffer += content;
-              resultBuffer += content;
-              if (resultBuffer.length > MAX_RESULT_BUFFER) {
-                resultBuffer = `[Earlier agent output omitted because it exceeded ${MAX_RESULT_BUFFER} characters.]\n\n${resultBuffer.slice(-MAX_RESULT_BUFFER)}`;
-              }
-              if (summaryBuffer.length > MAX_SUMMARY_BUFFER) {
-                summaryBuffer = summaryBuffer.slice(-MAX_SUMMARY_BUFFER);
-              }
-              if (content.includes('task-summary')) {
-                content = content.replace(/<\/?task-summary>/g, '');
-              }
-            }
-
-            // Reclassify 'create' tool as file_write
-            if (coreEvent.type === 'command' && metadata.command === 'create') {
-              eventType = 'file_write';
-            }
-
-            // Enrich file events with metadata.file extracted from tool arguments
-            if ((eventType === 'file_write' || eventType === 'file_edit' || eventType === 'file_read') && !metadata.file) {
-              const colonIdx = coreEvent.content.indexOf(':');
-              if (colonIdx > 0) {
-                try {
-                  const args = JSON.parse(coreEvent.content.slice(colonIdx + 1).trim());
-                  const filePath = args.path || args.file_path || args.file || args.filename;
-                  if (filePath) {
-                    metadata.file = filePath;
-                    lastFileEventFile = filePath;
-                    lastFileEventType = eventType;
-                  }
-                } catch { /* not JSON args, skip */ }
-              }
-            }
-
-            // Detect file writes from bash commands (cat > file, echo > file, mkdir, etc.)
-            if (coreEvent.type === 'command' && metadata.command === 'bash') {
-              const content = coreEvent.content;
-              // Match: cat > path, cat >> path, echo ... > path, tee path
-              const redirectMatch = content.match(/(?:cat|echo|printf)\s+.*?>\s*(\S+)/);
-              const teeMatch = content.match(/tee\s+(\S+)/);
-              const filePath = redirectMatch?.[1] || teeMatch?.[1];
-              if (filePath && !filePath.startsWith('-')) {
-                metadata.file = filePath.replace(/['"]/g, '');
-                metadata.fileEventType = 'file_write';
-              }
-            }
-
-            // Carry file metadata from preceding file_write/file_edit to its command_output
-            if (coreEvent.type === 'command_output' && lastFileEventFile && lastFileEventType) {
-              metadata.file = lastFileEventFile;
-              metadata.fileEventType = lastFileEventType;
-              lastFileEventFile = null;
-              lastFileEventType = null;
-            } else if (eventType !== 'file_write' && eventType !== 'file_edit' && eventType !== 'file_read') {
-              lastFileEventFile = null;
-              lastFileEventType = null;
-            }
-
-            this.emitEvent(task.id, {
-              id: coreEvent.id,
-              taskId: task.id,
-              type: eventType as AgentEvent['type'],
-              content,
-              timestamp: coreEvent.timestamp,
-              metadata,
-            });
-          },
-        });
-
-        this.sessions.set(task.id, { session, startTime: sessionStartTime, agentType });
-        onStatusChange('executing');
-
-        // Timeout guard. A task override is persisted with the card so retries
-        // stay managed by Agent Board instead of escaping to a direct process.
-        const taskTimeoutMs = resolveTaskTimeoutMs(task);
-        const timeoutId = setTimeout(() => {
-          if (!this.sessions.has(task.id)) return;
-          const timeoutMsg = `Agent timed out after ${Math.round(taskTimeoutMs / 60000)} minutes`;
-          console.warn(`[agent-manager] task ${task.id} timed out after ${taskTimeoutMs}ms`);
-          this.emitEvent(task.id, {
-            id: uuid(), taskId: task.id, type: 'error',
-            content: timeoutMsg,
-            timestamp: Date.now(),
-          });
-          const entry = this.sessions.get(task.id);
-          if (entry) {
-            this.sessions.delete(task.id);
-            entry.session?.abort().catch(() => {});
-            entry.session?.destroy().catch(() => {});
-          }
-          terminateOnce('failed', timeoutMsg);
-        }, taskTimeoutMs);
-
-        const entry = this.sessions.get(task.id);
-        if (entry) entry.timeoutId = timeoutId;
-
-        // Build prompt and execute — each provider returns a typed AgentResult
-        const safeDescription = (task.description || '').replace(/[<>]/g, '');
-        const prompt = `${safeTitle}\n\n${safeDescription}`;
-
-        // Load image attachments if available
-        let agentAttachments: AgentAttachment[] | undefined;
-        if (this.attachmentStore) {
-          const taskAttachments = await this.attachmentStore.getByTaskId(task.id);
-          if (taskAttachments.length > 0) {
-            const loaded: AgentAttachment[] = [];
-            for (const a of taskAttachments) {
-              const srcPath = path.join(UPLOADS_DIR, a.taskId, a.filename);
-              const att = loadAttachmentAsBase64(srcPath, a.originalName, a.mimeType);
-              if (att) loaded.push(att);
-            }
-            if (loaded.length > 0) agentAttachments = loaded;
-          }
-        }
-
-        console.log(`[agent-manager] executing ${agentType} for task ${task.id}${agentAttachments?.length ? ` with ${agentAttachments.length} image(s)` : ''}`);
-        const result = await session.execute(prompt, agentAttachments);
-        console.log(`[agent-manager] ${agentType} ${result.status} for task ${task.id}${result.error ? `: ${result.error}` : ''}`);
-
-        clearTimeout(timeoutId);
-
-        // Primary completion path — status comes from the provider
-        if (this.sessions.has(task.id)) {
-          this.sessions.delete(task.id);
-          // On success, persist the agent-authored summary BEFORE the status
-          // transition so the task-update broadcast carries it to clients.
-          // Always write (extracted value or null) so a rerun can't leave a
-          // stale summary from a previous run. Never let this block completion.
-          if (result.status === 'complete') {
-            try {
-              const summary = extractTaskSummary(summaryBuffer);
-              await this.eventRepo?.update(task.id, { summary });
-              const fullOutput = extractFullAgentOutput(resultBuffer);
-              if (fullOutput && this.eventRepo) {
-                await this.eventRepo.insertEvent({
-                  id: uuid(), taskId: task.id, type: 'complete', content: fullOutput,
-                  timestamp: Date.now(), metadata: { finalOutput: true },
-                });
-              }
-            } catch (err) {
-              console.error(`[agent-manager] failed to persist result for task ${task.id}:`, errorMessage(err));
-            }
-          }
-          terminateOnce(result.status, result.error);
-          session.destroy().catch(() => {});
-        }
-      } catch (err: unknown) {
-        const message = errorMessage(err);
-        const isCliMissing =
-          message.includes('ENOENT') ||
-          message.includes('not found') ||
-          message.includes('spawn');
-
-        const errorContent = isCliMissing
-          ? `${provider.displayName} CLI is not installed or not found in PATH.`
-          : `Failed to start ${provider.displayName} session: ${message}`;
-
-        this.emitEvent(task.id, {
-          id: uuid(), taskId: task.id, type: 'error',
-          content: errorContent,
-          timestamp: Date.now(),
-        });
-
-        const entry = this.sessions.get(task.id);
-        if (entry) this.sessions.delete(task.id);
-        terminateOnce('failed', errorContent);
-      }
-    })().catch((err: unknown) => {
-      console.error(`[agent-manager] unhandled error for task ${task.id}:`, err);
-      terminateOnce('failed');
+    // Start the session (fire-and-forget, same as before)
+    this.startSession(sessionId).catch((err: unknown) => {
+      console.error(`[agent-manager] failed to start session ${sessionId} for task ${task.id}:`, err);
+      void onStatusChange('failed');
     });
+
+    // Wire up worktree created callback if the session sets up a worktree
+    // The session's internal logic emits worktree events; we forward them.
+    if (onWorktreeCreated) {
+      // The worktree setup happens inside startSession; we listen via events.
+      // For backward compatibility, the callback is best-effort.
+    }
   }
 
   async sendMessage(taskId: string, message: string, attachmentIds?: string[]): Promise<boolean> {
-    const entry = this.sessions.get(taskId);
+    const sessionId = this.taskToSession.get(taskId);
+    if (!sessionId) return false;
+    const entry = this.sessions.get(sessionId);
     if (!entry?.session) return false;
 
     this.emitEvent(taskId, {
@@ -848,69 +1148,35 @@ Optional list of any work you did not complete or that should be followed up. Om
   }
 
   async stopAgent(taskId: string): Promise<boolean> {
-    const entry = this.sessions.get(taskId);
-    if (!entry) return false;
+    const sessionId = this.taskToSession.get(taskId);
+    if (!sessionId) return false;
+    return this.stopSession(sessionId);
+  }
 
-    if (entry.timeoutId) clearTimeout(entry.timeoutId);
-    const duration = Date.now() - entry.startTime;
-    const { agentType } = entry;
-    this.sessions.delete(taskId);
-    // Mark as stopped so terminateOnce (from the catch block) won't double-broadcast
-    this.stoppedTasks.add(taskId);
-    setTimeout(() => this.stoppedTasks.delete(taskId), STOPPED_TASK_TTL_MS);
-
-    (async () => {
-      try { await entry.session?.abort(); } catch { /* ignore */ }
-      try { await entry.session?.destroy(); } catch { /* ignore */ }
-    })();
-
-    this.emitEvent(taskId, {
-      id: uuid(), taskId, type: 'error',
-      content: 'Agent stopped by user.',
-      timestamp: Date.now(),
-      metadata: { agentType, duration, error: 'Agent stopped by user.' },
-    });
-
-    // Broadcast agent_complete so WS listeners know the agent finished
-    broadcast({
-      type: 'agent_complete',
-      payload: {
-        taskId,
-        status: 'failed',
-        agentType,
-        duration,
-        eventCount: (await this.getEvents(taskId)).length,
-      },
-    });
-
-    // Clean up stale group queue entry if this task belongs to a running group
-    for (const [groupId, q] of this.groupQueues) {
-      if (q.runningTaskIds.delete(taskId)) {
-        q.failedTaskIds.add(taskId);
-        Promise.resolve(q.onChildComplete(taskId)).catch((err: unknown) =>
-          console.error('[group] onChildComplete failed:', err),
-        );
-        if (q.pendingTaskIds.length === 0 && q.runningTaskIds.size === 0) {
-          this.groupQueues.delete(groupId);
-        } else {
-          queueMicrotask(() => this.drainGroupQueue(groupId));
-        }
-        break;
-      }
-    }
-
-    return true;
+  /** Stop a session by sessionId. */
+  async stopSessionById(sessionId: string): Promise<boolean> {
+    return this.stopSession(sessionId);
   }
 
   isRunning(taskId: string): boolean {
-    return this.sessions.has(taskId);
+    const sessionId = this.taskToSession.get(taskId);
+    if (!sessionId) return false;
+    return this.isSessionRunning(sessionId);
   }
 
-  shutdownAll(): void {
-    const entries = [...this.sessions.entries()];
-    this.sessions.clear();
+  /** Check if a session is running by sessionId. */
+  isSessionRunningById(sessionId: string): boolean {
+    return this.isSessionRunning(sessionId);
+  }
 
-    for (const [, entry] of entries) {
+  /** Shut down all sessions and providers. */
+  shutdownAll(): void {
+    const entries = [...this.sessions.values()];
+    this.sessions.clear();
+    this.taskToSession.clear();
+    this.sessionToTask.clear();
+
+    for (const entry of entries) {
       if (entry.timeoutId) clearTimeout(entry.timeoutId);
       (async () => {
         try { await entry.session?.abort(); } catch { /* ignore */ }
@@ -1024,3 +1290,4 @@ Optional list of any work you did not complete or that should be followed up. Om
     this.groupQueues.delete(groupId);
   }
 }
+

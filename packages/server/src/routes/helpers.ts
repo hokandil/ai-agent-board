@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { v4 as uuid } from 'uuid';
-import { execFileSync } from 'child_process';
-import fs from 'fs';
-import os from 'os';
+import { execFileSync, type ExecFileSyncOptions } from 'child_process';
+import fs from 'fs';import os from 'os';
 import path from 'path';
 import type { Project, Task, TaskGroup } from '../types.js';
 import { isValidPriority, isValidColumnId, isValidAgentType, isValidAgentTimeoutMinutes, VALID_AGENT_TYPES, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MIN_AGENT_TIMEOUT_MINUTES, MAX_AGENT_TIMEOUT_MINUTES } from '@ai-agent-board/shared/constants.js';
@@ -182,7 +181,7 @@ export function isAllowedRepoPath(repoPath: string): string | null {
   const gitDir = path.join(resolved, '.git');
   if (!fs.existsSync(gitDir)) {
     try {
-      execFileSync('git', ['init'], { cwd: resolved, stdio: 'pipe' });
+      gitExecFileSync(['init'], { cwd: resolved, stdio: 'pipe' });
       console.log(`[repo-path] initialized git repo at ${resolved}`);
     } catch (err: unknown) {
       return `Failed to initialize git repository: ${errorMessage(err)}`;
@@ -291,9 +290,69 @@ export function validateRepoPath(repoPath: string): RepoPathValidation {
   };
 }
 
+/** A resolved command plus the arguments that must precede the git sub-command. */
+export interface GitSpawnTarget {
+  file: string;
+  prefixArgs: string[];
+}
+
+/**
+ * Locate the Windows command processor by absolute path. PATH resolution is not
+ * enough here: the cmd.exe fallback exists for the case where PATH contains
+ * only a .cmd shim directory, and System32 is usually absent from that PATH.
+ */
+function windowsCommandProcessor(env: NodeJS.ProcessEnv): string {
+  const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows';
+  const candidate = path.join(systemRoot, 'System32', 'cmd.exe');
+  try {
+    if (fs.statSync(candidate).isFile()) return candidate;
+  } catch {
+    // System32 is not where we expected — fall back to PATH resolution.
+  }
+  return 'cmd.exe';
+}
+
+/**
+ * Resolve a git invocation that child_process can actually spawn. On Windows,
+ * execFile cannot run .cmd/.bat shims (npm/nvm-style installs), so prefer a real
+ * git.exe found on PATH; if only a shim exists, run git through cmd.exe, which can.
+ */
+export function gitSpawnTarget(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): GitSpawnTarget {
+  if (platform === 'win32') {
+    const pathValue = env.PATH ?? env.Path ?? '';
+    for (const entry of pathValue.split(path.delimiter)) {
+      if (!entry.trim()) continue;
+      const candidate = path.join(entry.trim(), 'git.exe');
+      try {
+        if (fs.statSync(candidate).isFile()) return { file: candidate, prefixArgs: [] };
+      } catch {
+        // not in this PATH entry — keep looking
+      }
+    }
+    return { file: windowsCommandProcessor(env), prefixArgs: ['/d', '/c', 'git'] };
+  }
+  return { file: 'git', prefixArgs: [] };
+}
+
+/**
+ * Run a git sub-command through the shim-safe spawn target. On Windows this
+ * prefers a real git.exe from PATH and falls back to cmd.exe when only a
+ * .cmd shim is available, which execFile cannot spawn directly.
+ */
+export function gitExecFileSync(
+  args: string[],
+  options: ExecFileSyncOptions,
+): string | Buffer {
+  const { file: gitFile, prefixArgs: gitPrefix } = gitSpawnTarget();
+  return execFileSync(gitFile, [...gitPrefix, ...args], options);
+}
+
 export function isGitWorkTree(repoPath: string): boolean {
   try {
-    return execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: repoPath, stdio: 'pipe' })
+    return gitExecFileSync(['rev-parse', '--is-inside-work-tree'], { cwd: repoPath, stdio: 'pipe', windowsHide: true })
       .toString()
       .trim() === 'true';
   } catch {
@@ -352,7 +411,7 @@ export function normalizeRepoUrl(url: string): string {
 /** Return the `origin` remote URL of a repo, or null if none/not a repo. */
 export function getGitRemoteOrigin(repoPath: string): string | null {
   try {
-    const out = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: repoPath, stdio: 'pipe' })
+    const out = gitExecFileSync(['remote', 'get-url', 'origin'], { cwd: repoPath, stdio: 'pipe' })
       .toString()
       .trim();
     return out || null;
@@ -367,7 +426,7 @@ export function getGitRemoteOrigin(repoPath: string): string | null {
  * fail fast instead of hanging.
  */
 export function cloneRepo(repoUrl: string, targetPath: string, timeoutMs = 120_000): void {
-  execFileSync('git', ['clone', '--', repoUrl, targetPath], {
+  gitExecFileSync(['clone', '--', repoUrl, targetPath], {
     stdio: 'pipe',
     timeout: timeoutMs,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { gitExecFileSync } from '../routes/helpers.js';
 import type { Task } from '../types.js';
 import type { TaskRepository } from '../repositories/types.js';
 
@@ -36,7 +37,7 @@ function isWithin(candidate: string, root: string): boolean {
 }
 
 export function listRegisteredWorktrees(repoPath: string): RegisteredWorktree[] {
-  const output = execFileSync('git', ['worktree', 'list', '--porcelain', '-z'], {
+  const output = gitExecFileSync(['worktree', 'list', '--porcelain', '-z'], {
     cwd: repoPath,
     stdio: 'pipe',
   }).toString();
@@ -107,12 +108,11 @@ function processEntryDisappeared(error: unknown): boolean {
     && ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ESRCH');
 }
 
-export function inspectWorktreeProcessUse(
+/** Linux: inspect /proc for processes whose cwd/exe/open-fd live in the worktree. */
+function inspectWorktreeProcessUseLinux(
   worktreePath: string,
-  platform = process.platform,
-  procRoot = '/proc',
+  procRoot: string,
 ): WorktreeProcessUse {
-  if (platform !== 'linux') return 'unknown';
   let processes: string[];
   try {
     processes = fs.readdirSync(procRoot).filter((entry) => /^\d+$/.test(entry));
@@ -146,6 +146,40 @@ export function inspectWorktreeProcessUse(
   return 'clear';
 }
 
+/** Windows: best-effort process inspection via PowerShell. An agent running in
+ *  the worktree typically references its path on its command line. When
+ *  PowerShell is unavailable we cannot verify safety, so we fail closed. */
+function inspectWorktreeProcessUseWindows(worktreePath: string): WorktreeProcessUse {
+  const root = fs.realpathSync(worktreePath);
+  const rootLower = root.replace(/\\/g, '/').toLowerCase();
+  try {
+    const output = execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      'Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine',
+    ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, encoding: 'utf8' });
+    const lines = output.toString().split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      if (line.replace(/\\/g, '/').toLowerCase().includes(rootLower)) {
+        return 'in-use';
+      }
+    }
+  } catch {
+    return 'unknown';
+  }
+  return 'clear';
+}
+
+export function inspectWorktreeProcessUse(
+  worktreePath: string,
+  platform = process.platform,
+  procRoot = '/proc',
+): WorktreeProcessUse {
+  if (platform === 'win32') return inspectWorktreeProcessUseWindows(worktreePath);
+  if (platform !== 'linux') return 'unknown';
+  return inspectWorktreeProcessUseLinux(worktreePath, procRoot);
+}
+
 function inspectRegisteredPath(
   repoPath: string,
   worktreePath: string,
@@ -177,7 +211,7 @@ function inspectRegisteredPath(
     return { status: 'blocked', reason: 'The registered worktree branch does not match the task branch.' };
   }
   if (!fs.existsSync(resolvedWorktree)) {
-    try { execFileSync('git', ['worktree', 'prune'], { cwd: resolvedRepo, stdio: 'pipe' }); } catch { /* best effort */ }
+    try { gitExecFileSync(['worktree', 'prune'], { cwd: resolvedRepo, stdio: 'pipe' }); } catch { /* best effort */ }
     return { status: 'missing' };
   }
 
@@ -185,18 +219,18 @@ function inspectRegisteredPath(
   try {
     before = fs.lstatSync(resolvedWorktree);
     if (!before.isDirectory() || before.isSymbolicLink()) throw new Error('not a directory');
-    const topLevel = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: resolvedWorktree, stdio: 'pipe' }).toString().trim();
-    const worktreeCommon = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: resolvedWorktree, stdio: 'pipe' }).toString().trim();
-    const repoCommon = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: resolvedRepo, stdio: 'pipe' }).toString().trim();
-    const branch = execFileSync('git', ['symbolic-ref', 'HEAD'], { cwd: resolvedWorktree, stdio: 'pipe' }).toString().trim();
+    const topLevel = gitExecFileSync(['rev-parse', '--show-toplevel'], { cwd: resolvedWorktree, stdio: 'pipe' }).toString().trim();
+    const worktreeCommon = gitExecFileSync(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: resolvedWorktree, stdio: 'pipe' }).toString().trim();
+    const repoCommon = gitExecFileSync(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: resolvedRepo, stdio: 'pipe' }).toString().trim();
+    const branch = gitExecFileSync(['symbolic-ref', 'HEAD'], { cwd: resolvedWorktree, stdio: 'pipe' }).toString().trim();
     if (normalizedPath(topLevel) !== normalizedPath(fs.realpathSync(resolvedWorktree))
       || normalizedPath(worktreeCommon) !== normalizedPath(repoCommon)
       || branch !== `refs/heads/${expectedBranch}`) {
       return { status: 'blocked', reason: 'Worktree identity does not match the task repository and branch.' };
     }
 
-    const records = execFileSync(
-      'git', ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching'],
+    const records = gitExecFileSync(
+      ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching'],
       { cwd: resolvedWorktree, stdio: 'pipe' },
     ).toString().split('\0').filter(Boolean);
     const unsafe = records.filter((record) => {
@@ -231,7 +265,7 @@ function cleanupRegisteredPath(repoPath: string, worktreePath: string, expectedB
     if (current.dev !== inspection.device || current.ino !== inspection.inode || current.isSymbolicLink()) {
       return { status: 'blocked', reason: 'Worktree identity changed during cleanup verification.' };
     }
-    execFileSync('git', ['worktree', 'remove', '--', resolvedWorktree], {
+    gitExecFileSync(['worktree', 'remove', '--', resolvedWorktree], {
       cwd: path.resolve(repoPath),
       stdio: 'pipe',
     });

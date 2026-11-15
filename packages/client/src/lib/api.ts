@@ -13,6 +13,19 @@ import type {
   UpdateProjectRequest,
   ProjectPathValidation,
   ProjectConfig,
+  MCPServer,
+  MCPTool,
+  MCPTransportType,
+  MCPToolCallResult,
+  MCPPermission,
+  SyncConnection,
+  SyncDirection,
+  ConflictPolicy,
+  SyncFieldMapping,
+  SyncConflict,
+  SyncState,
+  SyncResult,
+  AgentSession,
 } from '@/types';
 
 export interface TaskGroupWithChildren extends TaskGroup {
@@ -194,7 +207,190 @@ export const api = {
   stopGroup: (id: string) =>
     request<{ stopped: boolean }>(`/groups/${id}/stop`, { method: 'POST' }),
 
+  // --- MCP ---
+  getMcpServers: () =>
+    request<MCPServer[]>('/mcp/servers'),
+
+  getMcpServer: (id: string) =>
+    request<MCPServer>(`/mcp/servers/${encodeURIComponent(id)}`),
+
+  createMcpServer: (data: {
+    name: string;
+    transport: MCPTransportType;
+    command?: string;
+    args?: string[];
+    url?: string;
+    env?: Record<string, string>;
+    cwd?: string;
+    headers?: Record<string, string>;
+  }) =>
+    request<MCPServer>('/mcp/servers', { method: 'POST', body: JSON.stringify(data) }),
+
+  connectMcpServer: (id: string) =>
+    request<MCPServer>(`/mcp/servers/${encodeURIComponent(id)}/connect`, { method: 'POST' }),
+
+  disconnectMcpServer: (id: string) =>
+    request<MCPServer>(`/mcp/servers/${encodeURIComponent(id)}/disconnect`, { method: 'POST' }),
+
+  deleteMcpServer: (id: string) =>
+    request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  getMcpTools: (serverId: string) =>
+    request<{ tools: MCPTool[] }>(`/mcp/servers/${encodeURIComponent(serverId)}/tools`),
+
+  testMcpTool: (serverId: string, toolName: string, toolArgs?: unknown) =>
+    request<MCPToolCallResult>(`/mcp/servers/${encodeURIComponent(serverId)}/test-tool`, {
+      method: 'POST',
+      body: JSON.stringify({ toolName, arguments: toolArgs ?? {} }),
+    }),
+
+  getMcpPermissions: () =>
+    request<Array<{ serverId: string; serverName: string; agentType: string; toolName: string; allowed: boolean }>>('/mcp/permissions'),
+
+  getMcpPermissionsByServer: (serverId: string) =>
+    request<MCPPermission[]>(`/mcp/permissions/${encodeURIComponent(serverId)}`),
+
+  setMcpPermission: (data: {
+    serverId: string;
+    agentType: string;
+    toolName: string;
+    allowed: boolean;
+  }) =>
+    request<MCPPermission>('/mcp/permissions', { method: 'POST', body: JSON.stringify(data) }),
+
+  deleteMcpPermission: (data: {
+    serverId: string;
+    agentType: string;
+    toolName: string;
+  }) =>
+    request<void>('/mcp/permissions', {
+      method: 'DELETE',
+      body: JSON.stringify(data),
+    }),
+
+  // --- MCP Sync ---
+  getSyncConnections: () =>
+    request<SyncConnection[]>('/mcp/sync/connections'),
+
+  getSyncConnection: (id: string) =>
+    request<SyncConnection>(`/mcp/sync/connections/${encodeURIComponent(id)}`),
+
+  createSyncConnection: (data: {
+    serverId: string;
+    taskId: string;
+    externalSource: string;
+    externalKey: string;
+    externalTaskTool: string;
+    syncDirection?: SyncDirection;
+    conflictPolicy?: ConflictPolicy;
+  }) =>
+    request<SyncConnection>('/mcp/sync/connections', { method: 'POST', body: JSON.stringify(data) }),
+
+  syncConnection: (id: string) =>
+    request<SyncResult>(`/mcp/sync/connections/${encodeURIComponent(id)}/sync`, { method: 'POST' }),
+
+  importSyncTask: (id: string) =>
+    request<{ taskId: string; created: boolean }>(`/mcp/sync/connections/${encodeURIComponent(id)}/import`, { method: 'POST' }),
+
+  exportSyncTask: (id: string) =>
+    request<{ updated: boolean }>(`/mcp/sync/connections/${encodeURIComponent(id)}/export`, { method: 'POST' }),
+
+  deleteSyncConnection: (id: string) =>
+    request<void>(`/mcp/sync/connections/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  getSyncFieldMappings: (connectionId: string) =>
+    request<SyncFieldMapping[]>(`/mcp/sync/connections/${encodeURIComponent(connectionId)}/mappings`),
+
+  createSyncFieldMapping: (connectionId: string, data: {
+    externalField: string;
+    boardField: string;
+    transform?: SyncFieldMapping['transform'];
+    defaultValue?: string;
+  }) =>
+    request<SyncFieldMapping>(`/mcp/sync/connections/${encodeURIComponent(connectionId)}/mappings`, { method: 'POST', body: JSON.stringify(data) }),
+
+  deleteSyncFieldMapping: (id: string) =>
+    request<void>(`/mcp/sync/mappings/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  getSyncConflicts: (connectionId: string) =>
+    request<SyncConflict[]>(`/mcp/sync/connections/${encodeURIComponent(connectionId)}/conflicts`),
+
+  resolveSyncConflict: (id: string, resolvedValue: string, resolvedBy: string) =>
+    request<SyncConflict>(`/mcp/sync/conflicts/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify({ resolvedValue, resolvedBy }) }),
+
+  ignoreSyncConflict: (id: string) =>
+    request<void>(`/mcp/sync/conflicts/${encodeURIComponent(id)}/ignore`, { method: 'POST' }),
+
+  getSyncState: (connectionId: string) =>
+    request<SyncState>(`/mcp/sync/connections/${encodeURIComponent(connectionId)}/state`),
+
+  // --- Session Management ---
+  createSession: (data: {
+    agentType: AgentType;
+    taskId?: string;
+    model?: string;
+    useWorktree?: boolean;
+    repoPath?: string;
+    branchName?: string;
+    baseBranch?: string;
+  }) =>
+    request<AgentSession>('/api/sessions', { method: 'POST', body: JSON.stringify(data) }),
+
+  startSession: (id: string) =>
+    request<AgentSession>(`/api/sessions/${encodeURIComponent(id)}/start`, { method: 'POST' }),
+
+  stopSession: (id: string) =>
+    request<{ stopped: boolean }>(`/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
+
+  resumeSession: (id: string) =>
+    request<AgentSession>(`/api/sessions/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
+
+  getSessions: () =>
+    request<AgentSession[]>('/api/sessions'),
+
+  getSession: (id: string) =>
+    request<AgentSession>(`/api/sessions/${encodeURIComponent(id)}`),
+
+  getSessionEvents: (sessionId: string) =>
+    request<AgentEvent[]>(`/api/sessions/${encodeURIComponent(sessionId)}/events`),
+
+  assignSessionToTask: (taskId: string, sessionId: string) =>
+    request<Task>(`/api/tasks/${encodeURIComponent(taskId)}/assign-session`, {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    }),
+
+  // --- PTY Session Management ---
+  createPtySession: (data: {
+    cwd?: string;
+    cols?: number;
+    rows?: number;
+    env?: Record<string, string>;
+    name?: string;
+  }) =>
+    request<import('@/types').PtySession>('/api/pty/sessions', { method: 'POST', body: JSON.stringify(data) }),
+
+  getPtySessions: () =>
+    request<import('@/types').PtySession[]>('/api/pty/sessions'),
+
+  getPtySession: (id: string) =>
+    request<import('@/types').PtySession>(`/api/pty/sessions/${encodeURIComponent(id)}`),
+
+  sendPtyInput: (id: string, data: string) =>
+    request<{ sent: boolean }>(`/api/pty/sessions/${encodeURIComponent(id)}/input`, { method: 'POST', body: JSON.stringify({ data }) }),
+
+  resizePtySession: (id: string, cols: number, rows: number) =>
+    request<{ resized: boolean }>(`/api/pty/sessions/${encodeURIComponent(id)}/resize`, { method: 'POST', body: JSON.stringify({ cols, rows }) }),
+
+  killPtySession: (id: string, signal?: string) =>
+    request<{ killed: boolean }>(`/api/pty/sessions/${encodeURIComponent(id)}/kill`, { method: 'POST', body: JSON.stringify({ signal }) }),
+
+  deletePtySession: (id: string) =>
+    request<void>(`/api/pty/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
 };
+
+
 
 // --- WebSocket (shared singleton) ---
 
@@ -295,4 +491,21 @@ export function connectWS(onMessage: WSMessageHandler, onReconnect?: ReconnectHa
       ws = null;
     }
   };
+
+  // --- GitHub Sync ---
+  getGitHubIssues: (repoPath: string, limit?: number) =>
+    request<{ issues: any[] }>(`/api/github/tasks/${encodeURIComponent(repoPath)}/issues?limit=${limit ?? 10}`, { method: "GET" });
+
+  getGitHubPullRequests: (repoPath: string, limit?: number) =>
+    request<{ pullRequests: any[] }>(`/api/github/tasks/${encodeURIComponent(repoPath)}/pulls?limit=${limit ?? 10}`, { method: "GET" });
+
+  getGitHubCIRuns: (repoPath: string, limit?: number) =>
+    request<{ ciRuns: any[] }>(`/api/github/tasks/${encodeURIComponent(repoPath)}/ci?limit=${limit ?? 10}`, { method: "GET" });
+
+  getGitHubIssue: (repoPath: string, issueNumber: number) =>
+    request<any>(`/api/github/tasks/${encodeURIComponent(repoPath)}/issues/${issueNumber}`, { method: "GET" });
+
+  getGitHubPullRequest: (repoPath: string, prNumber: number) =>
+    request<any>(`/api/github/tasks/${encodeURIComponent(repoPath)}/pulls/${prNumber}`, { method: "GET" });
+
 }

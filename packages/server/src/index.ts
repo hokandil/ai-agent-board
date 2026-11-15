@@ -1,4 +1,15 @@
 import 'dotenv/config';
+
+// Process-level error handlers to prevent crashes from unhandled agent SDK errors.
+process.on('uncaughtException', (err: Error) => {
+  console.error('[server] uncaught exception:', err.message);
+  console.error(err.stack);
+});
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('[server] unhandled rejection:', reason instanceof Error ? reason.message : String(reason));
+  if (reason instanceof Error) console.error(reason.stack);
+});
+
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
@@ -13,10 +24,17 @@ import { createGitRouter } from './routes/git.js';
 import { createTemplateRouter } from './routes/templates.js';
 import { createGroupsRouter } from './routes/groups.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
+import { createMcpRouter } from './routes/mcp.js';
+import { createMcpSyncRouter } from './routes/mcp-sync.js';
+import { createMcpBoardServerRouter } from './routes/mcp-server.js';
+import { createGitHubRouter } from './routes/github.js';
+import { createSessionRouter } from './routes/sessions.js';
+import { createPtySessionRouter } from './routes/pty-sessions.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createOrchestrationsRouter } from './routes/orchestrations.js';
 import type { AttachmentStore } from './repositories/attachment-types.js';
 import { AgentManager } from './services/agent-manager.js';
+import { AuditLogger } from './services/audit-logger.js';
 import { authMiddleware } from './middleware/auth.js';
 import type { TaskRepository } from './repositories/types.js';
 import type { TemplateRepository } from './repositories/template-types.js';
@@ -49,6 +67,7 @@ let cleanupDb: () => void;
 
 // Initialize AgentManager
 const agentManager = new AgentManager();
+let auditLogger: AuditLogger;
 
 (async () => {
   // Load (and create on first run) the Agent Board config + clone root directory.
@@ -61,6 +80,7 @@ const agentManager = new AgentManager();
     const pool = new Pool({ connectionString: DATABASE_URL });
     await initPostgresDatabase(pool);
     taskRepo = new PostgresTaskRepository(pool);
+    auditLogger = new AuditLogger(taskRepo);
     const { PostgresProjectRepository } = await import('./repositories/postgres-projects.js');
     projectRepo = new PostgresProjectRepository(pool);
     const { PostgresTemplateRepository } = await import('./repositories/postgres-templates.js');
@@ -75,6 +95,7 @@ const agentManager = new AgentManager();
     // SQLite fallback
     const db = initDatabase();
     taskRepo = new SqliteTaskRepository(db);
+    auditLogger = new AuditLogger(taskRepo);
     const { SqliteProjectRepository } = await import('./repositories/sqlite-projects.js');
     projectRepo = new SqliteProjectRepository(db);
     const { SqliteTemplateRepository } = await import('./repositories/sqlite-templates.js');
@@ -121,6 +142,12 @@ const agentManager = new AgentManager();
   app.use('/api/templates', createTemplateRouter(templateRepo));
   app.use('/api/groups', createGroupsRouter(groupRepo, taskRepo, agentManager, projectRepo));
   app.use('/api', createAttachmentsRouter(taskRepo, attachmentStore));
+  app.use('/api/mcp', createMcpRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager, auditLogger));
+  app.use('/api/mcp/sync', createMcpSyncRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository & import('./repositories/mcp-sync-types.js').SyncRepository, auditLogger));
+  app.use('/api/mcp/server', createMcpBoardServerRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager, auditLogger));
+  app.use('/api/github', createGitHubRouter(taskRepo as TaskRepository));
+  app.use('/api/sessions', createSessionRouter(taskRepo as TaskRepository, agentManager));
+  app.use('/api/pty/sessions', createPtySessionRouter());
 
   // GET /api/agents — list available agents
   app.get('/api/agents', (_req, res) => { res.json(agentManager.getAvailableAgents()); });
@@ -143,7 +170,6 @@ const agentManager = new AgentManager();
   createWSS(server);
 
   await agentManager.initialize();
-
 
   // Recover orphaned task groups first — group children get group-aware
   // recovery (planning → idle for re-queue, executing → failed) before the

@@ -98,6 +98,34 @@ export function migrateSqliteDatabase(db: Database.Database): void {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id, timestamp ASC)`);
   }
 
+  // Migrate events.task_id to nullable for audit/session events without a task FK.
+  const eventCols = db.pragma('table_info(events)') as { name: string; notnull: number }[];
+  const taskIdCol = eventCols.find((c) => c.name === 'task_id');
+  if (taskIdCol && taskIdCol.notnull === 1) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      db.exec([
+        'BEGIN;',
+        'CREATE TABLE events_new (',
+        '  id         TEXT PRIMARY KEY,',
+        '  task_id    TEXT,',
+        '  type       TEXT NOT NULL,',
+        '  content    TEXT NOT NULL,',
+        '  timestamp  INTEGER NOT NULL,',
+        '  metadata   TEXT,',
+        '  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE',
+        ');',
+        'INSERT INTO events_new SELECT * FROM events;',
+        'DROP TABLE events;',
+        'ALTER TABLE events_new RENAME TO events;',
+        'COMMIT;',
+      ].join('\n'));
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON');
+    }
+    db.exec('CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id, timestamp ASC)');
+  }
+
   // Index for fast lookups by task_id + ordering by timestamp
   db.exec(`CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id, timestamp ASC)`);
 
@@ -278,6 +306,128 @@ export function migrateSqliteDatabase(db: Database.Database): void {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_attachments_task_id ON task_attachments(task_id)`);
+
+  // ─── MCP server registry ───────────────────────────────────────────────────
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      transport       TEXT NOT NULL CHECK (transport IN ('stdio', 'streamable-http', 'sse')),
+      command         TEXT,
+      args            TEXT NOT NULL DEFAULT '[]',
+      url             TEXT,
+      env             TEXT NOT NULL DEFAULT '{}',
+      cwd             TEXT,
+      headers         TEXT NOT NULL DEFAULT '{}',
+      status          TEXT NOT NULL DEFAULT 'disconnected'
+                      CHECK (status IN ('disconnected', 'connecting', 'connected', 'error')),
+      last_connected_at BIGINT,
+      last_error      TEXT,
+      created_at      BIGINT NOT NULL,
+      updated_at      BIGINT NOT NULL
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_tools (
+      id              TEXT PRIMARY KEY,
+      server_id       TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      description     TEXT,
+      input_schema    TEXT NOT NULL DEFAULT '{}',
+      output_schema   TEXT DEFAULT NULL,
+      annotations     TEXT DEFAULT NULL,
+      discovered_at   BIGINT NOT NULL,
+      UNIQUE (server_id, name)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_tools_server ON mcp_tools(server_id)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_permissions (
+      id        TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      agent_type TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      allowed   INTEGER NOT NULL DEFAULT 0 CHECK (allowed IN (0, 1)),
+      UNIQUE (server_id, agent_type, tool_name)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_server ON mcp_permissions(server_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_agent ON mcp_permissions(agent_type)`);
+
+  // ─── MCP external task synchronization ────────────────────────────────────
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_sync_connections (
+      id                    TEXT PRIMARY KEY,
+      server_id             TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      task_id               TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      external_source       TEXT NOT NULL,
+      external_key          TEXT NOT NULL,
+      external_task_tool    TEXT NOT NULL,
+      status                TEXT NOT NULL DEFAULT 'connected'
+                            CHECK (status IN ('connected', 'error', 'disconnected')),
+      last_sync_at          BIGINT,
+      last_error            TEXT,
+      sync_direction        TEXT NOT NULL DEFAULT 'bidirectional'
+                            CHECK (sync_direction IN ('import_only', 'export_only', 'bidirectional')),
+      conflict_policy       TEXT NOT NULL DEFAULT 'board_wins'
+                            CHECK (conflict_policy IN ('board_wins', 'external_wins', 'manual')),
+      created_at            BIGINT NOT NULL,
+      updated_at            BIGINT NOT NULL,
+      UNIQUE (external_source, external_key),
+      UNIQUE (task_id)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sync_field_mappings (
+      id              TEXT PRIMARY KEY,
+      connection_id   TEXT NOT NULL REFERENCES mcp_sync_connections(id) ON DELETE CASCADE,
+      external_field  TEXT NOT NULL,
+      board_field     TEXT NOT NULL,
+      transform       TEXT DEFAULT 'identity'
+                      CHECK (transform IN ('identity', 'lowercase', 'uppercase', 'capitalize', 'trim')),
+      default_value   TEXT,
+      UNIQUE (connection_id, external_field),
+      UNIQUE (connection_id, board_field)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sync_field_mappings_connection ON sync_field_mappings(connection_id)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sync_conflicts (
+      id              TEXT PRIMARY KEY,
+      connection_id   TEXT NOT NULL REFERENCES mcp_sync_connections(id) ON DELETE CASCADE,
+      external_field  TEXT NOT NULL,
+      board_field     TEXT NOT NULL,
+      external_value  TEXT,
+      board_value     TEXT,
+      resolved_value  TEXT,
+      resolved_at     BIGINT,
+      resolved_by     TEXT,
+      status          TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending', 'resolved', 'ignored')),
+      created_at      BIGINT NOT NULL,
+      updated_at      BIGINT NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sync_conflicts_connection ON sync_conflicts(connection_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON sync_conflicts(status)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sync_state (
+      id              TEXT PRIMARY KEY,
+      connection_id   TEXT NOT NULL REFERENCES mcp_sync_connections(id) ON DELETE CASCADE,
+      last_external_synced_at BIGINT,
+      last_board_synced_at BIGINT,
+      sync_count      INTEGER NOT NULL DEFAULT 0,
+      updated_at      BIGINT NOT NULL,
+      UNIQUE (connection_id)
+    )
+  `);
 }
 
 function hasSqliteForeignKey(
@@ -667,7 +817,7 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS events (
       id         TEXT PRIMARY KEY,
-      task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      task_id    TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       type       TEXT NOT NULL,
       content    TEXT NOT NULL,
       timestamp  BIGINT NOT NULL,
@@ -708,6 +858,128 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_task_attachments_task_id ON task_attachments(task_id)`);
+
+  // ─── MCP server registry ───────────────────────────────────────────────────
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      transport       TEXT NOT NULL CHECK (transport IN ('stdio', 'streamable-http', 'sse')),
+      command         TEXT,
+      args            TEXT NOT NULL DEFAULT '[]',
+      url             TEXT,
+      env             TEXT NOT NULL DEFAULT '{}',
+      cwd             TEXT,
+      headers         TEXT NOT NULL DEFAULT '{}',
+      status          TEXT NOT NULL DEFAULT 'disconnected'
+                      CHECK (status IN ('disconnected', 'connecting', 'connected', 'error')),
+      last_connected_at BIGINT,
+      last_error      TEXT,
+      created_at      BIGINT NOT NULL,
+      updated_at      BIGINT NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mcp_tools (
+      id              TEXT PRIMARY KEY,
+      server_id       TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      description     TEXT,
+      input_schema    TEXT NOT NULL DEFAULT '{}',
+      output_schema   TEXT DEFAULT NULL,
+      annotations     TEXT DEFAULT NULL,
+      discovered_at   BIGINT NOT NULL,
+      UNIQUE (server_id, name)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_mcp_tools_server ON mcp_tools(server_id)`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mcp_permissions (
+      id        TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      agent_type TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      allowed   INTEGER NOT NULL DEFAULT 0 CHECK (allowed IN (0, 1)),
+      UNIQUE (server_id, agent_type, tool_name)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_server ON mcp_permissions(server_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_agent ON mcp_permissions(agent_type)`);
+
+  // ─── MCP external task synchronization ────────────────────────────────────
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mcp_sync_connections (
+      id                    TEXT PRIMARY KEY,
+      server_id             TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      task_id               TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      external_source       TEXT NOT NULL,
+      external_key          TEXT NOT NULL,
+      external_task_tool    TEXT NOT NULL,
+      status                TEXT NOT NULL DEFAULT 'connected'
+                            CHECK (status IN ('connected', 'error', 'disconnected')),
+      last_sync_at          BIGINT,
+      last_error            TEXT,
+      sync_direction        TEXT NOT NULL DEFAULT 'bidirectional'
+                            CHECK (sync_direction IN ('import_only', 'export_only', 'bidirectional')),
+      conflict_policy       TEXT NOT NULL DEFAULT 'board_wins'
+                            CHECK (conflict_policy IN ('board_wins', 'external_wins', 'manual')),
+      created_at            BIGINT NOT NULL,
+      updated_at            BIGINT NOT NULL,
+      UNIQUE (external_source, external_key),
+      UNIQUE (task_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sync_field_mappings (
+      id              TEXT PRIMARY KEY,
+      connection_id   TEXT NOT NULL REFERENCES mcp_sync_connections(id) ON DELETE CASCADE,
+      external_field  TEXT NOT NULL,
+      board_field     TEXT NOT NULL,
+      transform       TEXT DEFAULT 'identity'
+                      CHECK (transform IN ('identity', 'lowercase', 'uppercase', 'capitalize', 'trim')),
+      default_value   TEXT,
+      UNIQUE (connection_id, external_field),
+      UNIQUE (connection_id, board_field)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sync_field_mappings_connection ON sync_field_mappings(connection_id)`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sync_conflicts (
+      id              TEXT PRIMARY KEY,
+      connection_id   TEXT NOT NULL REFERENCES mcp_sync_connections(id) ON DELETE CASCADE,
+      external_field  TEXT NOT NULL,
+      board_field     TEXT NOT NULL,
+      external_value  TEXT,
+      board_value     TEXT,
+      resolved_value  TEXT,
+      resolved_at     BIGINT,
+      resolved_by     TEXT,
+      status          TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending', 'resolved', 'ignored')),
+      created_at      BIGINT NOT NULL,
+      updated_at      BIGINT NOT NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sync_conflicts_connection ON sync_conflicts(connection_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON sync_conflicts(status)`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sync_state (
+      id              TEXT PRIMARY KEY,
+      connection_id   TEXT NOT NULL REFERENCES mcp_sync_connections(id) ON DELETE CASCADE,
+      last_external_synced_at BIGINT,
+      last_board_synced_at BIGINT,
+      sync_count      INTEGER NOT NULL DEFAULT 0,
+      updated_at      BIGINT NOT NULL,
+      UNIQUE (connection_id)
+    )
+  `);
 
   // Migrate existing FK to ON DELETE CASCADE if not already set
   const { rows: fkRows } = await pool.query(`

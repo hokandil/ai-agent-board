@@ -38,6 +38,9 @@ export interface Task {
   externalSource?: string;
   externalKey?: string;
   provenance?: TaskProvenance;
+  externalPRUrl?: string;
+  externalPRNumber?: number;
+  reviewStatus?: "pending" | "approved" | "changes_requested";
   /** Optional execution limit for this task. Omit to use the server default. */
   timeoutMinutes?: number | null;
 }
@@ -170,11 +173,46 @@ export type AgentEventType =
   | 'output'
   | 'test_result'
   | 'error'
-  | 'complete';
+  | 'complete'
+  | 'audit_log';
+
+export type SessionStatus = 'idle' | 'planning' | 'executing' | 'complete' | 'failed' | 'stopped';
+
+export interface AgentSession {
+  id: string;
+  taskId?: string;
+  agentType: AgentType;
+  status: SessionStatus;
+  model?: string;
+  worktreePath?: string;
+  startedAt?: number;
+  completedAt?: number;
+  createdAt: number;
+}
+
+export interface CreateSessionRequest {
+  agentType: AgentType;
+  taskId?: string;
+  model?: string;
+  useWorktree?: boolean;
+  repoPath?: string;
+  branchName?: string;
+  baseBranch?: string;
+}
+
+export interface StartSessionRequest {
+  taskId?: string;
+}
+
+export interface SessionConcurrencyLimits {
+  perProvider?: Partial<Record<AgentType, number>>;
+  perProject?: Partial<Record<string, number>>;
+  global?: number;
+}
 
 export interface AgentEvent {
   id: string;
-  taskId: string;
+  taskId?: string;
   type: AgentEventType;
   content: string;
   timestamp: number;
