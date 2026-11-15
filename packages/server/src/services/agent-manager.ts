@@ -75,6 +75,12 @@ interface ManagedSession {
   completedAt?: number;
   createdAt: number;
   timeoutId?: ReturnType<typeof setTimeout>;
+  /** Task-level status persistence callback (set by startAgent). Invoked on
+   *  execution-state transitions and on terminal status so the task's agentStatus
+   *  is durably persisted and group queues can drain. */
+  onStatusChange?: (status: Task['agentStatus']) => void | Promise<void>;
+  /** Persists the worktree path once the worktree is set up (set by startAgent). */
+  onWorktreeCreated?: (worktreePath: string) => void | Promise<void>;
 }
 
 // Event log per task (capped to prevent unbounded growth)
@@ -410,8 +416,11 @@ export class AgentManager {
       if (terminated) return;
       if (this.stoppedTasks.has(task.id)) { terminated = true; return; }
       terminated = true;
-      const entry2 = this.sessions.get(sessionId);
-      if (entry2?.timeoutId) clearTimeout(entry2.timeoutId);
+      // Use the captured session entry: the completion/timeout/error paths remove
+      // the session from this.sessions BEFORE calling terminateOnce. Re-fetching it
+      // here would return undefined and throw before the concurrency counters are
+      // released, leaking the active-session count.
+      if (entry.timeoutId) clearTimeout(entry.timeoutId);
       const duration = Date.now() - durationStart;
 
       if (status === 'complete') {
@@ -441,8 +450,8 @@ export class AgentManager {
         },
       });
 
-      entry2!.status = status === 'complete' ? 'complete' : 'failed';
-      entry2!.completedAt = Date.now();
+      entry.status = status === 'complete' ? 'complete' : 'failed';
+      entry.completedAt = Date.now();
 
       // Decrement concurrency counters
       this.providerSessionCounts.set(entry.agentType, Math.max(0, (this.providerSessionCounts.get(entry.agentType) || 1) - 1));
@@ -451,10 +460,28 @@ export class AgentManager {
       }
 
       // Clear session from task mapping but keep the session record for history
-      if (entry2!.taskId) {
-        this.taskToSession.delete(entry2!.taskId);
+      if (entry.taskId) {
+        this.taskToSession.delete(entry.taskId);
       }
       this.sessionToTask.delete(sessionId);
+
+      // Persist the terminal task status (and drive group-queue draining) AFTER the
+      // concurrency counters are released, so a drained group can start its next
+      // child without being blocked by a stale counter.
+      try {
+        await entry.onStatusChange?.(status);
+      } catch (err) {
+        agentLog({
+          level: 'error',
+          component: 'agent-manager',
+          agentType: entry.agentType,
+          sessionId,
+          taskId: task.id,
+          errorCategory: 'persist_failure',
+          message: `Failed to persist terminal status for task ${task.id}`,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     };
 
     // Set up worktree if configured
@@ -466,6 +493,12 @@ export class AgentManager {
         if (worktreePath) {
           task.worktreePath = worktreePath;
           entry.worktreePath = worktreePath;
+          // Persist the worktree path durably (previously only set in memory).
+          if (entry.onWorktreeCreated) {
+            Promise.resolve(entry.onWorktreeCreated(worktreePath)).catch((err) => {
+              console.error(`[agent-manager] failed to persist worktree path for task ${task.id}:`, err);
+            });
+          }
           const reused = priorWorktree != null && path.resolve(priorWorktree) === path.resolve(worktreePath);
           let dirtyHint = '';
           if (reused) {
@@ -618,6 +651,9 @@ Optional list of any work you did not complete or that should be followed up. Om
 
         entry.session = coreSession;
         entry.status = 'executing';
+        if (entry.onStatusChange) {
+          Promise.resolve(entry.onStatusChange('executing')).catch(() => {});
+        }
 
         // Timeout guard
         const taskTimeoutMs = resolveTaskTimeoutMs(task);
@@ -1224,18 +1260,21 @@ Optional list of any work you did not complete or that should be followed up. Om
       sessionId = this.createSession(task.agentType || 'copilot', task.id);
     }
 
+    // Attach the task-level callbacks to the session so the execution lifecycle
+    // persists status/worktree and drives group-queue draining. (Previously these
+    // were only invoked on startup failure, so terminal status was never persisted
+    // and group queues never drained.)
+    const entry = this.sessions.get(sessionId);
+    if (entry) {
+      entry.onStatusChange = onStatusChange;
+      entry.onWorktreeCreated = onWorktreeCreated;
+    }
+
     // Start the session (fire-and-forget, same as before)
     this.startSession(sessionId).catch((err: unknown) => {
       console.error(`[agent-manager] failed to start session ${sessionId} for task ${task.id}:`, err);
       void onStatusChange('failed');
     });
-
-    // Wire up worktree created callback if the session sets up a worktree
-    // The session's internal logic emits worktree events; we forward them.
-    if (onWorktreeCreated) {
-      // The worktree setup happens inside startSession; we listen via events.
-      // For backward compatibility, the callback is best-effort.
-    }
   }
 
   async sendMessage(taskId: string, message: string, attachmentIds?: string[]): Promise<boolean> {
