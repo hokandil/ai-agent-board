@@ -115,12 +115,13 @@ optional custom work). It fits **after** Stage 9 so current priorities are not d
   (`Task.agentSessionId`), terminal-session retention, true provider resume via the SDK
   `resumeSessionId`, per-project concurrency counting fix, and client event recovery on
   WebSocket reconnect.
-- **Stage C — Interactive control: C1 DONE.** Bidirectional approval from the Board
+- **Stage C — Interactive control: C1 + Claude DONE.** Bidirectional approval from the Board
   (agent requests → Board displays → user responds without losing the session). Permission
-  event + registry + response API + AgentPanel UI; wired for ACP (Hermes/OpenClaw/Grok) and
-  Copilot (no auto-approve). **C2 pending:** Claude `canUseTool`, OpenCode permission API.
-  **C3 pending:** Codex limitation surfaced + expiry/cancellation hardening. See
-  `docs/AGENT_INTERACTIVE_CONTROL.md`.
+  event + registry + response API + AgentPanel UI; wired for ACP (Hermes/OpenClaw/Grok),
+  Copilot (no auto-approve), and Claude (`canUseTool`, no auto-accept). **C2 remaining:**
+  OpenCode permission API (event-stream + respond endpoint; OpenCode not installed here, so
+  wiring is documented but unverified). **C3 pending:** Codex limitation surfaced +
+  expiry/cancellation hardening. See `docs/AGENT_INTERACTIVE_CONTROL.md`.
 - **Stage D — MCP & skills delivery: pending.**
 
 Real-agent execution is exercised only by the opt-in live harness

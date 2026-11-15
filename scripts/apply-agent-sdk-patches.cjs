@@ -51,6 +51,15 @@ const PATCHES = [
     replace: 'return COPILOT_APPROVED;',
     with: 'return COPILOT_DENIED;',
   },
+  {
+    // Stage C2: wire Claude's native canUseTool to the Board's interactive hook. When the
+    // hook is present, use permissionMode 'default' so tool use prompts (instead of the
+    // wrapper's acceptEdits auto-accept) and canUseTool collects the user's decision.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/claude.js',
+    replace: 'permissionMode,',
+    with: "permissionMode: config.hooks?.onPermissionRequest ? 'default' : permissionMode, ...(config.hooks?.onPermissionRequest ? { canUseTool: async (toolName, input, opts) => { const d = await config.hooks.onPermissionRequest({ kind: toolName, tool: (opts && opts.title) || toolName }); return d.kind === 'approved' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'Permission denied by user' }; } } : {}),",
+  },
 ];
 
 const repoRoot = path.resolve(__dirname, '..');

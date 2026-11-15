@@ -191,3 +191,42 @@ test('Copilot permission requests are interactive (no auto-approve)', async () =
     assert.equal((await repo.getById(task.id))?.agentStatus, 'complete');
   } finally { db.close(); }
 });
+
+test('Claude permission requests are interactive via the hook (no auto-accept)', async () => {
+  const { db, repo } = makeRepo();
+  try {
+    const manager = new AgentManager();
+    manager.initEventPersistence(repo);
+    const claudeProvider = {
+      name: 'claude', displayName: 'Fake Claude', model: 'fake',
+      start: async () => {}, stop: async () => {},
+      createSession: async (config: any) => ({
+        sessionId: 'fake-claude-sess',
+        execute: async () => {
+          const decision = await config.hooks.onPermissionRequest({ kind: 'Bash', tool: 'Run a command' });
+          if (decision.kind === 'approved') return { status: 'complete' };
+          return { status: 'failed', error: 'permission denied' };
+        },
+        send: async () => {}, abort: async () => {}, destroy: async () => {},
+      }),
+    };
+    (manager as any).providers.set('claude', claudeProvider);
+    (manager as any).availableAgents = [{ name: 'claude', displayName: 'Fake Claude', available: true }];
+
+    const task = { ...makeTask('perm-claude'), agentType: 'claude' as const };
+    await repo.create(task);
+    const seen: string[] = [];
+    manager.startAgent(task, persister(repo, task.id, seen));
+
+    await waitFor(() => manager.getPendingPermissions(task.id).length > 0);
+    const pending = manager.getPendingPermissions(task.id)[0];
+    assert.equal(pending.tool, 'Run a command', 'tool label must be carried to the Board');
+    await new Promise((r) => setTimeout(r, 60));
+    assert.notEqual((await repo.getById(task.id))?.agentStatus, 'complete', 'Claude must not auto-accept');
+
+    assert.equal(manager.respondToPermission(task.id, pending.requestId, true), true);
+    await waitFor(() => seen.includes('complete'));
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal((await repo.getById(task.id))?.agentStatus, 'complete');
+  } finally { db.close(); }
+});

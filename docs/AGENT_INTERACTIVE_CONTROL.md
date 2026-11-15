@@ -65,10 +65,19 @@ permission events; remove Copilot auto-approve), rather than forking the provide
 
 ## Incremental plan
 
-- **C1:** permission model + registry + response API + AgentPanel UI; wire ACP + Copilot (patched).
-- **C2:** Claude `canUseTool` and OpenCode permission wiring.
-- **C3:** Codex limitation surfaced; expiration/cancellation hardening; regression tests.
+- **C1 — DONE:** permission model + registry + response API + AgentPanel UI; wired ACP
+  (Hermes/OpenClaw/Grok) + Copilot (patched; Copilot auto-approve removed).
+- **C2 — Claude DONE; OpenCode pending.** Claude wired via native `canUseTool` (patched to use
+  `permissionMode:'default'` + `canUseTool` when the Board hook is present; no auto-accept).
+  OpenCode is natively capable (permission events + `postSessionIdPermissionsPermissionId`
+  respond endpoint) but uses an event-stream + separate respond call rather than the hook
+  return pattern; it needs an event-subscription patch that emits a `permission_request` and
+  responds via the SDK. OpenCode is not installed in this environment, so that wiring is
+  documented but not implemented/verified (avoid inventing the event flow).
+- **C3 — pending:** Codex limitation surfaced (config `approvalPolicy` only, no interactive
+  callback); expiration/cancellation hardening; further regression tests.
 
-Deterministic tests use a fake provider that raises a permission request and asserts the
-request→respond→resume flow, expiry, cross-task rejection, and no-auto-approve. Real interactive
-approval is verified only via the opt-in live harness (explicit authorization).
+Deterministic tests use fake providers that raise a permission request and assert the
+request→respond→resume flow, expiry, cross-task rejection, and no-auto-approve (ACP, Copilot,
+Claude covered). Real interactive approval is verified only via the opt-in live harness
+(explicit authorization).

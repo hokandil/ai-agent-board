@@ -592,15 +592,15 @@ Optional list of any work you did not complete or that should be followed up. Om
           repoPath: task.repoPath,
           resumeSessionId: entry.resumeProviderSessionId,
           systemPrompt,
-          // Stage C: interactive approval for ACP providers (Hermes/OpenClaw/Grok) and
-          // Copilot. The provider's permission request is routed to the Board and the
+          // Stage C: interactive approval for ACP providers (Hermes/OpenClaw/Grok), Copilot,
+          // and Claude. The provider's permission request is routed to the Board and the
           // user's explicit decision is awaited (never auto-approved). The async hook is
-          // awaited by the patched providers. Claude/OpenCode wiring is Stage C2; Codex
-          // exposes only a config approval policy (limitation surfaced, not auto-approved).
-          hooks: (['hermes', 'openclaw', 'grok', 'copilot'].includes(entry.agentType)
+          // awaited by the patched providers. OpenCode wiring is Stage C2; Codex exposes
+          // only a config approval policy (limitation surfaced, not auto-approved).
+          hooks: (['hermes', 'openclaw', 'grok', 'copilot', 'claude'].includes(entry.agentType)
             ? {
-                onPermissionRequest: (req: { kind: string }) =>
-                  this.requestPermission(task.id, sessionId, req.kind).then((decision) => ({
+                onPermissionRequest: (req: { kind: string; tool?: string }) =>
+                  this.requestPermission(task.id, sessionId, req.kind, req.tool).then((decision) => ({
                     kind: decision === 'approved' ? 'approved' : 'denied-by-rules',
                   })),
               }
