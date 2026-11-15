@@ -334,28 +334,28 @@ export const api = {
     branchName?: string;
     baseBranch?: string;
   }) =>
-    request<AgentSession>('/api/sessions', { method: 'POST', body: JSON.stringify(data) }),
+    request<AgentSession>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
 
   startSession: (id: string) =>
-    request<AgentSession>(`/api/sessions/${encodeURIComponent(id)}/start`, { method: 'POST' }),
+    request<AgentSession>(`/sessions/${encodeURIComponent(id)}/start`, { method: 'POST' }),
 
   stopSession: (id: string) =>
-    request<{ stopped: boolean }>(`/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
+    request<{ stopped: boolean }>(`/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
 
   resumeSession: (id: string) =>
-    request<AgentSession>(`/api/sessions/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
+    request<AgentSession>(`/sessions/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
 
   getSessions: () =>
-    request<AgentSession[]>('/api/sessions'),
+    request<AgentSession[]>('/sessions'),
 
   getSession: (id: string) =>
-    request<AgentSession>(`/api/sessions/${encodeURIComponent(id)}`),
+    request<AgentSession>(`/sessions/${encodeURIComponent(id)}`),
 
   getSessionEvents: (sessionId: string) =>
-    request<AgentEvent[]>(`/api/sessions/${encodeURIComponent(sessionId)}/events`),
+    request<AgentEvent[]>(`/sessions/${encodeURIComponent(sessionId)}/events`),
 
   assignSessionToTask: (taskId: string, sessionId: string) =>
-    request<Task>(`/api/tasks/${encodeURIComponent(taskId)}/assign-session`, {
+    request<Task>(`/tasks/${encodeURIComponent(taskId)}/assign-session`, {
       method: 'POST',
       body: JSON.stringify({ sessionId }),
     }),
@@ -368,25 +368,25 @@ export const api = {
     env?: Record<string, string>;
     name?: string;
   }) =>
-    request<import('@/types').PtySession>('/api/pty/sessions', { method: 'POST', body: JSON.stringify(data) }),
+    request<import('@/types').PtySession>('/pty/sessions', { method: 'POST', body: JSON.stringify(data) }),
 
   getPtySessions: () =>
-    request<import('@/types').PtySession[]>('/api/pty/sessions'),
+    request<import('@/types').PtySession[]>('/pty/sessions'),
 
   getPtySession: (id: string) =>
-    request<import('@/types').PtySession>(`/api/pty/sessions/${encodeURIComponent(id)}`),
+    request<import('@/types').PtySession>(`/pty/sessions/${encodeURIComponent(id)}`),
 
   sendPtyInput: (id: string, data: string) =>
-    request<{ sent: boolean }>(`/api/pty/sessions/${encodeURIComponent(id)}/input`, { method: 'POST', body: JSON.stringify({ data }) }),
+    request<{ sent: boolean }>(`/pty/sessions/${encodeURIComponent(id)}/input`, { method: 'POST', body: JSON.stringify({ data }) }),
 
   resizePtySession: (id: string, cols: number, rows: number) =>
-    request<{ resized: boolean }>(`/api/pty/sessions/${encodeURIComponent(id)}/resize`, { method: 'POST', body: JSON.stringify({ cols, rows }) }),
+    request<{ resized: boolean }>(`/pty/sessions/${encodeURIComponent(id)}/resize`, { method: 'POST', body: JSON.stringify({ cols, rows }) }),
 
   killPtySession: (id: string, signal?: string) =>
-    request<{ killed: boolean }>(`/api/pty/sessions/${encodeURIComponent(id)}/kill`, { method: 'POST', body: JSON.stringify({ signal }) }),
+    request<{ killed: boolean }>(`/pty/sessions/${encodeURIComponent(id)}/kill`, { method: 'POST', body: JSON.stringify({ signal }) }),
 
   deletePtySession: (id: string) =>
-    request<void>(`/api/pty/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    request<void>(`/pty/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
 };
 
@@ -494,18 +494,18 @@ export function connectWS(onMessage: WSMessageHandler, onReconnect?: ReconnectHa
 
   // --- GitHub Sync ---
   getGitHubIssues: (repoPath: string, limit?: number) =>
-    request<{ issues: any[] }>(`/api/github/tasks/${encodeURIComponent(repoPath)}/issues?limit=${limit ?? 10}`, { method: "GET" });
+    request<{ issues: any[] }>(`/github/tasks/${encodeURIComponent(repoPath)}/issues?limit=${limit ?? 10}`, { method: "GET" });
 
   getGitHubPullRequests: (repoPath: string, limit?: number) =>
-    request<{ pullRequests: any[] }>(`/api/github/tasks/${encodeURIComponent(repoPath)}/pulls?limit=${limit ?? 10}`, { method: "GET" });
+    request<{ pullRequests: any[] }>(`/github/tasks/${encodeURIComponent(repoPath)}/pulls?limit=${limit ?? 10}`, { method: "GET" });
 
   getGitHubCIRuns: (repoPath: string, limit?: number) =>
-    request<{ ciRuns: any[] }>(`/api/github/tasks/${encodeURIComponent(repoPath)}/ci?limit=${limit ?? 10}`, { method: "GET" });
+    request<{ ciRuns: any[] }>(`/github/tasks/${encodeURIComponent(repoPath)}/ci?limit=${limit ?? 10}`, { method: "GET" });
 
   getGitHubIssue: (repoPath: string, issueNumber: number) =>
-    request<any>(`/api/github/tasks/${encodeURIComponent(repoPath)}/issues/${issueNumber}`, { method: "GET" });
+    request<any>(`/github/tasks/${encodeURIComponent(repoPath)}/issues/${issueNumber}`, { method: "GET" });
 
   getGitHubPullRequest: (repoPath: string, prNumber: number) =>
-    request<any>(`/api/github/tasks/${encodeURIComponent(repoPath)}/pulls/${prNumber}`, { method: "GET" });
+    request<any>(`/github/tasks/${encodeURIComponent(repoPath)}/pulls/${prNumber}`, { method: "GET" });
 
 }

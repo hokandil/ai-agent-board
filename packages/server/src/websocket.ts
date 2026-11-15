@@ -134,7 +134,11 @@ export function broadcast(message: WSMessage): void {
   const data = JSON.stringify(message);
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(data);
+      try {
+        client.send(data);
+      } catch {
+        // Ignore send errors on individual clients
+      }
     }
   });
 }

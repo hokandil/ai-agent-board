@@ -527,72 +527,85 @@ Optional list of any work you did not complete or that should be followed up. Om
           repoPath: task.repoPath,
           systemPrompt,
           onEvent: (coreEvent: CoreAgentEvent) => {
-            const metadata: Record<string, unknown> = { ...coreEvent.metadata };
-            let eventType = coreEvent.type;
-            let content = coreEvent.content;
+            try {
+              const metadata: Record<string, unknown> = { ...coreEvent.metadata };
+              let eventType = coreEvent.type;
+              let content = coreEvent.content;
 
-            if (coreEvent.type === 'output') {
-              summaryBuffer += content;
-              resultBuffer += content;
-              if (resultBuffer.length > MAX_RESULT_BUFFER) {
-                resultBuffer = `[Earlier agent output omitted because it exceeded ${MAX_RESULT_BUFFER} characters.]\n\n${resultBuffer.slice(-MAX_RESULT_BUFFER)}`;
+              if (coreEvent.type === 'output') {
+                summaryBuffer += content;
+                resultBuffer += content;
+                if (resultBuffer.length > MAX_RESULT_BUFFER) {
+                  resultBuffer = `[Earlier agent output omitted because it exceeded ${MAX_RESULT_BUFFER} characters.]\n\n${resultBuffer.slice(-MAX_RESULT_BUFFER)}`;
+                }
+                if (summaryBuffer.length > MAX_SUMMARY_BUFFER) {
+                  summaryBuffer = summaryBuffer.slice(-MAX_SUMMARY_BUFFER);
+                }
+                if (content.includes('task-summary')) {
+                  content = content.replace(/<\/?task-summary>/g, '');
+                }
               }
-              if (summaryBuffer.length > MAX_SUMMARY_BUFFER) {
-                summaryBuffer = summaryBuffer.slice(-MAX_SUMMARY_BUFFER);
+
+              if (coreEvent.type === 'command' && metadata.command === 'create') {
+                eventType = 'file_write';
               }
-              if (content.includes('task-summary')) {
-                content = content.replace(/<\/?task-summary>/g, '');
+
+              if ((eventType === 'file_write' || eventType === 'file_edit' || eventType === 'file_read') && !metadata.file) {
+                const colonIdx = coreEvent.content.indexOf(':');
+                if (colonIdx > 0) {
+                  try {
+                    const args = JSON.parse(coreEvent.content.slice(colonIdx + 1).trim());
+                    const filePath = args.path || args.file_path || args.file || args.filename;
+                    if (filePath) {
+                      metadata.file = filePath;
+                      lastFileEventFile = filePath;
+                      lastFileEventType = eventType;
+                    }
+                  } catch { /* not JSON args, skip */ }
+                }
               }
-            }
 
-            if (coreEvent.type === 'command' && metadata.command === 'create') {
-              eventType = 'file_write';
-            }
-
-            if ((eventType === 'file_write' || eventType === 'file_edit' || eventType === 'file_read') && !metadata.file) {
-              const colonIdx = coreEvent.content.indexOf(':');
-              if (colonIdx > 0) {
-                try {
-                  const args = JSON.parse(coreEvent.content.slice(colonIdx + 1).trim());
-                  const filePath = args.path || args.file_path || args.file || args.filename;
-                  if (filePath) {
-                    metadata.file = filePath;
-                    lastFileEventFile = filePath;
-                    lastFileEventType = eventType;
-                  }
-                } catch { /* not JSON args, skip */ }
+              if (coreEvent.type === 'command' && metadata.command === 'bash') {
+                const content = coreEvent.content;
+                const redirectMatch = content.match(/(?:cat|echo|printf)\s+.*?>\s*(\S+)/);
+                const teeMatch = content.match(/tee\s+(\S+)/);
+                const filePath = redirectMatch?.[1] || teeMatch?.[1];
+                if (filePath && !filePath.startsWith('-')) {
+                  metadata.file = filePath.replace(/['"]/g, '');
+                  metadata.fileEventType = 'file_write';
+                }
               }
-            }
 
-            if (coreEvent.type === 'command' && metadata.command === 'bash') {
-              const content = coreEvent.content;
-              const redirectMatch = content.match(/(?:cat|echo|printf)\s+.*?>\s*(\S+)/);
-              const teeMatch = content.match(/tee\s+(\S+)/);
-              const filePath = redirectMatch?.[1] || teeMatch?.[1];
-              if (filePath && !filePath.startsWith('-')) {
-                metadata.file = filePath.replace(/['"]/g, '');
-                metadata.fileEventType = 'file_write';
+              if (coreEvent.type === 'command_output' && lastFileEventFile && lastFileEventType) {
+                metadata.file = lastFileEventFile;
+                metadata.fileEventType = lastFileEventType;
+                lastFileEventFile = null;
+                lastFileEventType = null;
+              } else if (eventType !== 'file_write' && eventType !== 'file_edit' && eventType !== 'file_read') {
+                lastFileEventFile = null;
+                lastFileEventType = null;
               }
-            }
 
-            if (coreEvent.type === 'command_output' && lastFileEventFile && lastFileEventType) {
-              metadata.file = lastFileEventFile;
-              metadata.fileEventType = lastFileEventType;
-              lastFileEventFile = null;
-              lastFileEventType = null;
-            } else if (eventType !== 'file_write' && eventType !== 'file_edit' && eventType !== 'file_read') {
-              lastFileEventFile = null;
-              lastFileEventType = null;
+              this.emitEvent(task.id, {
+                id: coreEvent.id,
+                taskId: task.id,
+                type: eventType as AgentEvent['type'],
+                content,
+                timestamp: coreEvent.timestamp,
+                metadata,
+              });
+            } catch (err: unknown) {
+              agentLog({
+                level: 'error',
+                component: 'agent-manager',
+                agentType: entry.agentType,
+                sessionId,
+                taskId: task.id,
+                errorCategory: 'execution_failure',
+                message: 'Error processing agent event',
+                error: errorMessage(err),
+              });
             }
-
-            this.emitEvent(task.id, {
-              id: coreEvent.id,
-              taskId: task.id,
-              type: eventType as AgentEvent['type'],
-              content,
-              timestamp: coreEvent.timestamp,
-              metadata,
-            });
           },
         });
 
