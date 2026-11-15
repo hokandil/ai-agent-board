@@ -132,7 +132,7 @@ let auditLogger: AuditLogger;
   app.use('/api/groups', createGroupsRouter(groupRepo, taskRepo, agentManager, projectRepo));
   app.use('/api', createAttachmentsRouter(taskRepo, attachmentStore));
   app.use('/api/mcp', createMcpRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager));
-  app.use('/api/mcp/sync', createMcpSyncRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository & import('./repositories/mcp-sync-types.js').SyncRepository));
+  app.use('/api/mcp/sync', createMcpSyncRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository & import('./repositories/mcp-sync-types.js').SyncRepository, auditLogger));
   app.use('/api/mcp/server', createMcpBoardServerRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager, auditLogger));
   app.use('/api/github', createGitHubRouter(taskRepo as TaskRepository));
   app.use('/api/sessions', createSessionRouter(taskRepo as TaskRepository, agentManager));

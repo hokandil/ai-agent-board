@@ -4,12 +4,13 @@ import type { SyncConnectionRecord } from '../repositories/mcp-sync-types.js';
 import type { TaskRepository } from '../repositories/types.js';
 import type { MCPRepository } from '../repositories/mcp-types.js';
 import type { SyncRepository } from '../repositories/mcp-sync-types.js';
+import type { AuditLogger } from '../services/audit-logger.js';
 import { syncEngine } from '../services/mcp-sync.js';
 import { asyncHandler } from './helpers.js';
 
 type FullRepo = TaskRepository & MCPRepository & SyncRepository;
 
-export function createMcpSyncRouter(repo: FullRepo): Router {
+export function createMcpSyncRouter(repo: FullRepo, auditLogger: AuditLogger): Router {
   const router = Router();
 
   // ─── Sync Connection CRUD ─────────────────────────────────────────────
@@ -61,6 +62,7 @@ export function createMcpSyncRouter(repo: FullRepo): Router {
     };
 
     const created = await repo.createConnection(conn);
+    await auditLogger.logSyncEvent(id, 'mcp.sync.create', undefined, undefined, { serverId, taskId, externalSource, externalKey });
     res.status(201).json(created);
   }));
 
@@ -72,6 +74,7 @@ export function createMcpSyncRouter(repo: FullRepo): Router {
 
     try {
       const result = await syncEngine.sync(id);
+      await auditLogger.logSyncEvent(id, 'mcp.sync.run', undefined, undefined, { result });
       res.json(result);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -87,6 +90,7 @@ export function createMcpSyncRouter(repo: FullRepo): Router {
 
     try {
       const result = await syncEngine.importTask(id);
+      await auditLogger.logSyncEvent(id, 'mcp.sync.import', undefined, undefined, { result });
       res.status(201).json(result);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -102,6 +106,7 @@ export function createMcpSyncRouter(repo: FullRepo): Router {
 
     try {
       const result = await syncEngine.exportTask(id);
+      await auditLogger.logSyncEvent(id, 'mcp.sync.export', undefined, undefined, { result });
       res.json(result);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -114,6 +119,7 @@ export function createMcpSyncRouter(repo: FullRepo): Router {
     const id = req.params.id as string;
     const deleted = await repo.deleteConnection(id);
     if (!deleted) { res.status(404).json({ error: 'Sync connection not found' }); return; }
+    await auditLogger.logSyncEvent(id, 'mcp.sync.create', undefined, undefined, { action: 'delete_connection' });
     res.status(204).end();
   }));
 
@@ -167,6 +173,7 @@ export function createMcpSyncRouter(repo: FullRepo): Router {
 
     const conflict = await repo.resolveConflict(id, resolvedValue, resolvedBy);
     if (!conflict) { res.status(404).json({ error: 'Conflict not found' }); return; }
+    await auditLogger.logSyncEvent(id, 'mcp.sync.conflict.resolve', resolvedBy, undefined, { resolvedValue });
     res.json(conflict);
   }));
 
@@ -175,6 +182,7 @@ export function createMcpSyncRouter(repo: FullRepo): Router {
     const id = req.params.id as string;
     const ignored = await repo.ignoreConflict(id);
     if (!ignored) { res.status(404).json({ error: 'Conflict not found' }); return; }
+    await auditLogger.logSyncEvent(id, 'mcp.sync.conflict.ignore', undefined, undefined, {});
     res.status(204).end();
   }));
 
