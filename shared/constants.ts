@@ -36,6 +36,15 @@ export const MAX_AGENT_TIMEOUT_MINUTES = 240;
 export const MAX_GROUP_CHILDREN = 20;
 export const MIN_GROUP_CHILDREN = 2;
 
+/**
+ * Sentinel sent by the client to explicitly remove an MCP credential.
+ *
+ * Credential values are never returned to the client (they are redacted), so
+ * an empty value in an update payload means "leave this credential as it is".
+ * Clearing a credential therefore requires this explicit marker.
+ */
+export const MCP_CREDENTIAL_CLEAR = '__CLEAR__';
+
 export function isValidAgentTimeoutMinutes(value: unknown): value is number {
   return typeof value === 'number'
     && Number.isInteger(value)

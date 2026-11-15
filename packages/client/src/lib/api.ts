@@ -503,8 +503,7 @@ const statusListeners = new Set<(status: ConnectionStatus) => void>();
 
 /**
  * Two independent liveness signals:
- * - `socketHealthy`: the board's WebSocket is open (the backend process and
- *   the proxy are serving the board).
+ * - `socketHealthy`: the board's WebSocket is open (live updates work).
  * - `httpHealthy`: the last REST call succeeded; `false` means a request and
  *   a corroborating health probe both failed, so the backend is unreachable.
  *
@@ -512,11 +511,16 @@ const statusListeners = new Set<(status: ConnectionStatus) => void>();
  */
 let socketHealthy = false;
 let httpHealthy: boolean | null = null;
+/** Last socket state published to listeners (so socket-only changes notify). */
+let publishedSocketHealthy = false;
 
 function computeConnectionStatus(): ConnectionStatus {
+  // A proven REST failure is a proven outage.
   if (httpHealthy === false) return 'disconnected';
-  if (socketHealthy) return 'connected';
-  return 'disconnected';
+  // A proven REST success is a proven reachable backend.
+  if (httpHealthy === true) return 'connected';
+  // Nothing known yet: trust the socket.
+  return socketHealthy ? 'connected' : 'connecting';
 }
 
 function setConnectionStatus(status: ConnectionStatus) {
@@ -526,9 +530,21 @@ function setConnectionStatus(status: ConnectionStatus) {
   statusListeners.forEach((fn) => fn(status));
 }
 
-/** Recompute and publish the connection state from the two liveness signals. */
+/**
+ * Recompute and publish the connection state from the two liveness signals.
+ * Listeners are notified when either signal changes so the UI can reflect a
+ * socket-only transition (e.g. live updates reconnecting while REST works).
+ */
 function refreshConnectionStatus() {
-  setConnectionStatus(computeConnectionStatus());
+  const next = computeConnectionStatus();
+  const socketChanged = publishedSocketHealthy !== socketHealthy;
+  publishedSocketHealthy = socketHealthy;
+  if (next === connectionStatus && !socketChanged) return;
+  if (next !== connectionStatus) {
+    if (next === 'connected') hasConnectedOnce = true;
+    connectionStatus = next;
+  }
+  statusListeners.forEach((fn) => fn(connectionStatus));
 }
 
 /** The backend answered a REST call: it is reachable. */
@@ -602,6 +618,11 @@ function startHealthHeartbeat(): void {
 
 export function getConnectionStatus(): ConnectionStatus {
   return connectionStatus;
+}
+
+/** True while the board's live-update WebSocket is open. */
+export function isSocketConnected(): boolean {
+  return socketHealthy;
 }
 
 /** Returns true only after a successful connection has been made at least once */

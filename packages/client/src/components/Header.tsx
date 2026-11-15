@@ -3,6 +3,7 @@ import { ArrowLeft, Kanban, Search, Archive, ArrowUpDown, Filter, Plus, X, Menu,
 import { ThemeToggle } from './ThemeToggle';
 import { FilterChips, type StatusFilter } from './FilterChips';
 import { useConnectionStatus } from '@/hooks/useConnectionStatus';
+import { isSocketConnected } from '@/lib/api';
 import type { AgentType } from '@/types';
 
 type SortBy = 'title' | 'priority' | 'created' | 'status';
@@ -45,6 +46,7 @@ export function Header({ theme, toggleTheme, searchQuery, onSearchChange, showAr
   const mobileMenuSearchRef = useRef<HTMLInputElement>(null);
   const hasActiveFilters = activeAgentTypes.length > 0 || activeStatuses.length > 0;
   const { status: wsStatus, wasConnected } = useConnectionStatus();
+  const socketUp = isSocketConnected();
 
   useEffect(() => {
     if (mobileMenuOpen) {
@@ -74,17 +76,23 @@ export function Header({ theme, toggleTheme, searchQuery, onSearchChange, showAr
             {title}
           </h1>
           <span className="hidden items-center gap-1 text-[10px] lg:flex">
-            {wsStatus === 'connected' && (
+            {wsStatus === 'connected' && socketUp && (
               <>
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="text-emerald-500/70">Live</span>
+              </>
+            )}
+            {wsStatus === 'connected' && !socketUp && (
+              <>
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                <span className="text-amber-400/80">Reconnecting…</span>
               </>
             )}
             {wsStatus === 'disconnected' && (
               <>
                 <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
                 <span className="text-red-400">
-                  {wasConnected ? 'Reconnecting…' : 'Backend offline'}
+                  {wasConnected ? 'Backend offline' : 'Backend offline'}
                 </span>
               </>
             )}

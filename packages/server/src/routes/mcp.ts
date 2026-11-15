@@ -7,12 +7,48 @@ import type { AgentManager } from '../services/agent-manager.js';
 import type { AuditLogger } from '../services/audit-logger.js';
 import { redactSensitive } from '../services/audit-logger.js';
 import { mcpClientManager } from '../services/mcp-client.js';
+import { MCP_CREDENTIAL_CLEAR } from '@ai-agent-board/shared/constants.js';
 import { asyncHandler } from './helpers.js';
 
 const VALID_TRANSPORTS: MCPTransportType[] = ['stdio', 'streamable-http', 'sse'];
 
 function isValidTransport(value: unknown): value is MCPTransportType {
   return typeof value === 'string' && VALID_TRANSPORTS.includes(value as MCPTransportType);
+}
+
+/**
+ * Merge an incoming credential map onto the stored one.
+ *
+ * Credential values are never sent back to the client (they are redacted), so
+ * an empty value in an update means "keep the stored secret". Removing a
+ * credential requires the explicit `MCP_CREDENTIAL_CLEAR` marker.
+ */
+function mergeCredentials(
+  existing: Record<string, string>,
+  incoming: Record<string, string>
+): Record<string, string> {
+  const merged: Record<string, string> = { ...existing };
+  for (const [key, value] of Object.entries(incoming)) {
+    if (!key.trim()) continue;
+    if (value === MCP_CREDENTIAL_CLEAR) {
+      delete merged[key];
+      continue;
+    }
+    if (value === '') continue; // leave the stored credential untouched
+    merged[key] = value;
+  }
+  return merged;
+}
+
+/** Drop credential entries with an empty value (used on create). */
+function dropEmptyCredentials(creds: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(creds)) {
+    if (!key.trim()) continue;
+    if (value === '') continue;
+    out[key] = value;
+  }
+  return out;
 }
 
 function serverRecordToResponse(record: any): MCPServer {
@@ -106,7 +142,8 @@ export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManag
     const server: MCPServer = {
       id, name, transport,
       command, args: args ?? [], url,
-      env: env ?? {}, cwd, headers: headers ?? {},
+      // Empty credential values are meaningless on create — drop them.
+      env: dropEmptyCredentials(env ?? {}), cwd, headers: dropEmptyCredentials(headers ?? {}),
       status: 'disconnected',
       created_at: now, updated_at: now,
     };
@@ -148,9 +185,9 @@ export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManag
     if (command !== undefined) updates.command = command;
     if (args !== undefined) updates.args = args;
     if (url !== undefined) updates.url = url;
-    if (env !== undefined) updates.env = env;
+    if (env !== undefined) updates.env = mergeCredentials(server.env ?? {}, env);
     if (cwd !== undefined) updates.cwd = cwd;
-    if (headers !== undefined) updates.headers = headers;
+    if (headers !== undefined) updates.headers = mergeCredentials(server.headers ?? {}, headers);
 
     const updated = await repo.updateServer(id, updates);
     if (!updated) { res.status(500).json({ error: 'Failed to update server' }); return; }

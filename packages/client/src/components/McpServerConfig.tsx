@@ -4,6 +4,7 @@ import {
   Circle, Plug, Plus, RefreshCw, Sliders, Trash2, X, Edit2,
 } from 'lucide-react';
 import type { MCPServer, MCPTool, MCPTransportType } from '@/types';
+import { MCP_CREDENTIAL_CLEAR } from '@/types';
 import { api } from '@/lib/api';
 
 type TransportOption = { value: MCPTransportType; label: string };
@@ -31,6 +32,23 @@ export function McpServerConfig(_props: {
   >([]);
   const [permLoading, setPermLoading] = useState(false);
   const [agentTypes, setAgentTypes] = useState<string[]>([]);
+  /** Credentials the user explicitly marked for removal, keyed `kind:key`. */
+  const [clearedCredentials, setClearedCredentials] = useState<Set<string>>(new Set());
+
+  const toggleCredentialCleared = useCallback((kind: 'env' | 'headers', key: string) => {
+    setClearedCredentials((prev) => {
+      const next = new Set(prev);
+      const id = `${kind}:${key}`;
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const isCredentialCleared = useCallback(
+    (kind: 'env' | 'headers', key: string) => clearedCredentials.has(`${kind}:${key}`),
+    [clearedCredentials]
+  );
 
   const loadServers = useCallback(async () => {
     setError(null);
@@ -234,7 +252,7 @@ export function McpServerConfig(_props: {
           </p>
         </div>
         <button
-          onClick={() => { setEditingServer(null); setOpenForm(true); }}
+          onClick={() => { setEditingServer(null); setClearedCredentials(new Set()); setOpenForm(true); }}
           className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md border bg-primary text-primary-foreground hover:bg-primary/90"
         >
           <Plus className="h-4 w-4" /> Add Server
@@ -321,7 +339,7 @@ export function McpServerConfig(_props: {
                       <Sliders className="h-3 w-3 mr-1" /> Tools
                     </button>
                     <button
-                      onClick={() => { setEditingServer(s); setOpenForm(true); }}
+                      onClick={() => { setEditingServer(s); setClearedCredentials(new Set()); setOpenForm(true); }}
                       className="ml-2 px-3 py-1 text-xs font-medium rounded-md border text-muted-foreground hover:bg-muted"
                     >
                       <Edit2 className="h-3 w-3 mr-1" /> Edit
@@ -470,18 +488,22 @@ export function McpServerConfig(_props: {
                     command: (formData.get('command') as string) || undefined,
                     args: formData.get('args') ? ((formData.get('args') as string).split(',').map(s => s.trim()).filter(Boolean)) : [],
                     url: (formData.get('url') as string) || undefined,
-                    env: pairsToObj(
+                    env: buildCredentialPayload(
                       Array.from(formData.getAll('env_key')).map((key, i) => ({
                         key: (key as string),
                         value: (formData.getAll('env_value')[i] as string) ?? '',
-                      }))
+                      })),
+                      clearedCredentials,
+                      'env'
                     ),
                     cwd: (formData.get('cwd') as string) || undefined,
-                    headers: pairsToObj(
+                    headers: buildCredentialPayload(
                       Array.from(formData.getAll('header_key')).map((key, i) => ({
                         key: (key as string),
                         value: (formData.getAll('header_value')[i] as string) ?? '',
-                      }))
+                      })),
+                      clearedCredentials,
+                      'headers'
                     ),
                   };
                   if (editingServer) {
@@ -568,7 +590,7 @@ export function McpServerConfig(_props: {
                       </p>
                       <div className="space-y-1">
                         {envPairs(editingServer?.env ?? {}).map(({ key, value }, i) => (
-                          <div key={i} className="flex gap-2">
+                          <div key={i} className="flex gap-2 items-center">
                             <input
                               name="env_key"
                               defaultValue={key}
@@ -578,9 +600,18 @@ export function McpServerConfig(_props: {
                             <input
                               name="env_value"
                               defaultValue={value === '[REDACTED]' ? '' : value}
-                              className="border rounded px-2 py-1 text-sm w-2/3"
-                              placeholder="Enter value to change"
+                              disabled={isCredentialCleared('env', key)}
+                              className="border rounded px-2 py-1 text-sm w-2/3 disabled:opacity-50"
+                              placeholder={isCredentialCleared('env', key) ? 'Will be removed' : 'Enter value to change'}
                             />
+                            <button
+                              type="button"
+                              onClick={() => toggleCredentialCleared('env', key)}
+                              className={`shrink-0 px-2 py-1 text-xs font-medium rounded border ${isCredentialCleared('env', key) ? 'border-red-500/40 bg-red-500/10 text-red-500' : 'border-border text-muted-foreground hover:bg-muted'}`}
+                              title={isCredentialCleared('env', key) ? 'Undo removal' : 'Remove this credential on save'}
+                            >
+                              {isCredentialCleared('env', key) ? 'Undo' : 'Clear'}
+                            </button>
                           </div>
                         ))}
                         <button
@@ -611,7 +642,7 @@ export function McpServerConfig(_props: {
                       </p>
                       <div className="space-y-1">
                         {envPairs(editingServer?.headers ?? {}).map(({ key, value }, i) => (
-                          <div key={i} className="flex gap-2">
+                          <div key={i} className="flex gap-2 items-center">
                             <input
                               name="header_key"
                               defaultValue={key}
@@ -621,9 +652,18 @@ export function McpServerConfig(_props: {
                             <input
                               name="header_value"
                               defaultValue={value === '[REDACTED]' ? '' : value}
-                              className="border rounded px-2 py-1 text-sm w-2/3"
-                              placeholder="Enter value to change"
+                              disabled={isCredentialCleared('headers', key)}
+                              className="border rounded px-2 py-1 text-sm w-2/3 disabled:opacity-50"
+                              placeholder={isCredentialCleared('headers', key) ? 'Will be removed' : 'Enter value to change'}
                             />
+                            <button
+                              type="button"
+                              onClick={() => toggleCredentialCleared('headers', key)}
+                              className={`shrink-0 px-2 py-1 text-xs font-medium rounded border ${isCredentialCleared('headers', key) ? 'border-red-500/40 bg-red-500/10 text-red-500' : 'border-border text-muted-foreground hover:bg-muted'}`}
+                              title={isCredentialCleared('headers', key) ? 'Undo removal' : 'Remove this credential on save'}
+                            >
+                              {isCredentialCleared('headers', key) ? 'Undo' : 'Clear'}
+                            </button>
                           </div>
                         ))}
                         <button
@@ -717,9 +757,29 @@ function envPairs(obj: Record<string, string>): { key: string; value: string }[]
   return Object.entries(obj).map(([key, value]) => ({ key, value }));
 }
 
-function pairsToObj(pairs: { key: string; value: string }[]): Record<string, string> {
-  return pairs.reduce((acc, { key, value }) => {
-    if (key.trim()) acc[key.trim()] = value;
-    return acc;
-  }, {} as Record<string, string>);
+/**
+ * Build the credential payload for a create/update request.
+ *
+ * - A value the user typed replaces the stored credential.
+ * - An empty value means "leave the stored credential untouched" (stored
+ *   secrets are redacted, so the field always starts empty).
+ * - A credential the user explicitly cleared is sent with the clear marker.
+ */
+function buildCredentialPayload(
+  pairs: { key: string; value: string }[],
+  cleared: Set<string>,
+  kind: 'env' | 'headers'
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const { key, value } of pairs) {
+    const trimmedKey = key.trim();
+    if (!trimmedKey) continue;
+    if (cleared.has(`${kind}:${trimmedKey}`)) {
+      out[trimmedKey] = MCP_CREDENTIAL_CLEAR;
+      continue;
+    }
+    if (value === '') continue; // unchanged — keep the stored credential
+    out[trimmedKey] = value;
+  }
+  return out;
 }

@@ -26,7 +26,7 @@ export type {
   WSMessage,
 } from '../../../../shared/types.js';
 
-export { VALID_TRANSITIONS, MAX_GROUP_CHILDREN, MIN_GROUP_CHILDREN } from '../../../../shared/constants.js';
+export { VALID_TRANSITIONS, MAX_GROUP_CHILDREN, MIN_GROUP_CHILDREN, MCP_CREDENTIAL_CLEAR } from '../../../../shared/constants.js';
 
 // ─── MCP types ───────────────────────────────────────────────────────────────
 
