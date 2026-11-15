@@ -42,6 +42,7 @@ const eventIconMap: Record<AgentEventType, React.ElementType> = {
   test_result: CheckCircle2,
   error: AlertCircle,
   complete: CheckCircle2,
+  audit_log: AlertCircle,
 };
 
 const eventColorMap: Record<AgentEventType, string> = {
@@ -70,6 +71,7 @@ const eventLabelMap: Record<AgentEventType, string> = {
   test_result: 'Test Result',
   error: 'Error',
   complete: 'Complete',
+  audit_log: 'Audit Log',
 };
 
 /** A coalesced event merges consecutive events of the same type */
