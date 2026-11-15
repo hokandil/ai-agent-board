@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  ArrowRight, Plus, RefreshCw,
-  Sliders, Trash2, X,
+  ArrowRight, Circle, Plus, RefreshCw,
+  Sliders, Trash2, X, Edit2,
 } from 'lucide-react';
 import type {
   SyncConnection, SyncDirection, ConflictPolicy,
   SyncFieldMapping, SyncConflict, SyncResult,
+  MCPServer, MCPTool,
 } from '@/types';
 import { api } from '@/lib/api';
 
@@ -27,6 +28,7 @@ const POLICY_OPTIONS: PolicyOption[] = [
 
 export function McpSyncConfig() {
   const [connections, setConnections] = useState<SyncConnection[]>([]);
+  const [servers, setServers] = useState<MCPServer[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [openForm, setOpenForm] = useState(false);
   const [editingConn, setEditingConn] = useState<SyncConnection | null>(null);
@@ -36,6 +38,19 @@ export function McpSyncConfig() {
   const [conflicts, setConflicts] = useState<SyncConflict[]>([]);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [mappingLoading, setMappingLoading] = useState(false);
+  const [formServerId, setFormServerId] = useState('');
+  const [serverTools, setServerTools] = useState<MCPTool[]>([]);
+  const [toolsLoading, setToolsLoading] = useState(false);
+  const [toolChoice, setToolChoice] = useState('');
+
+  const loadServers = useCallback(async () => {
+    try {
+      const list = await api.getMcpServers();
+      setServers(list);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load MCP servers');
+    }
+  }, []);
 
   const loadConnections = useCallback(async () => {
     setError(null);
@@ -48,8 +63,47 @@ export function McpSyncConfig() {
   }, []);
 
   useEffect(() => {
+    loadServers();
     loadConnections();
-  }, [loadConnections]);
+  }, [loadServers, loadConnections]);
+
+  /** Task-like tools exposed by an MCP server, used to seed the sync tool picker. */
+  const taskLikeTools = useMemo(() => {
+    const pattern = /task|issue|plan|story|ticket|work_item|workitem|todo|backlog|requirement/i;
+    return serverTools.filter((t) => pattern.test(t.name) || pattern.test(t.description ?? ''));
+  }, [serverTools]);
+
+  const loadServerTools = useCallback(async (serverId: string) => {
+    if (!serverId) {
+      setServerTools([]);
+      return;
+    }
+    setToolsLoading(true);
+    try {
+      const data = await api.getMcpTools(serverId);
+      setServerTools(data.tools);
+    } catch {
+      setServerTools([]);
+    } finally {
+      setToolsLoading(false);
+    }
+  }, []);
+
+  const openAddForm = useCallback(() => {
+    setEditingConn(null);
+    setFormServerId('');
+    setToolChoice('');
+    setServerTools([]);
+    setOpenForm(true);
+  }, []);
+
+  const openEditForm = useCallback(async (conn: SyncConnection) => {
+    setEditingConn(conn);
+    setFormServerId(conn.serverId);
+    setToolChoice(conn.externalTaskTool);
+    setOpenForm(true);
+    await loadServerTools(conn.serverId);
+  }, [loadServerTools]);
 
   const loadConnectionDetail = useCallback(async (id: string) => {
     setMappingLoading(true);
@@ -87,6 +141,27 @@ export function McpSyncConfig() {
       setError(err instanceof Error ? err.message : 'Failed to create sync connection');
     }
   }, []);
+
+  const handleUpdate = useCallback(async (data: {
+    serverId: string;
+    taskId: string;
+    externalSource: string;
+    externalKey: string;
+    externalTaskTool: string;
+    syncDirection?: SyncDirection;
+    conflictPolicy?: ConflictPolicy;
+  }) => {
+    if (!editingConn) return;
+    setError(null);
+    try {
+      const updated = await api.updateSyncConnection(editingConn.id, data);
+      setConnections((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      setOpenForm(false);
+      setEditingConn(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to update sync connection');
+    }
+  }, [editingConn]);
 
   const handleSync = useCallback(async (id: string) => {
     setError(null);
@@ -206,6 +281,7 @@ export function McpSyncConfig() {
     const variants: Record<string, string> = {
       connected: 'bg-green-500/20 text-green-600 border-green-500/30',
       error: 'bg-red-500/20 text-red-600 border-red-500/30',
+      connecting: 'bg-yellow-500/20 text-yellow-600 border-yellow-500/30',
       disconnected: 'bg-muted text-muted-foreground',
     };
     return variants[status] || variants.disconnected;
@@ -222,7 +298,7 @@ export function McpSyncConfig() {
           </p>
         </div>
         <button
-          onClick={() => { setEditingConn(null); setOpenForm(true); }}
+          onClick={openAddForm}
           className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md border bg-primary text-primary-foreground hover:bg-primary/90"
         >
           <Plus className="h-4 w-4" /> Add Connection
@@ -240,6 +316,7 @@ export function McpSyncConfig() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-muted-foreground">
+              <th className="pb-2">MCP Server</th>
               <th className="pb-2">External Source</th>
               <th className="pb-2">External Key</th>
               <th className="pb-2">Direction</th>
@@ -248,8 +325,21 @@ export function McpSyncConfig() {
             </tr>
           </thead>
           <tbody>
-            {connections.map((c) => (
+            {connections.map((c) => {
+              const server = servers.find((s) => s.id === c.serverId);
+              const serverStatus = server?.status ?? 'disconnected';
+              const serverStatusClass = `inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${statusBadge(serverStatus)}`;
+              return (
               <tr key={c.id} className="border-b">
+                <td className="py-2 font-medium">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate">{server?.name ?? c.serverId}</span>
+                    <span className={serverStatusClass}>
+                      <Circle className={`h-2 w-2 ${server?.status === 'connected' ? 'bg-current' : 'bg-muted'}`} />
+                      {serverStatus}
+                    </span>
+                  </div>
+                </td>
                 <td className="py-2 font-medium">{c.externalSource}</td>
                 <td className="py-2 text-xs text-muted-foreground">{c.externalKey}</td>
                 <td className="py-2">{c.syncDirection}</td>
@@ -290,12 +380,19 @@ export function McpSyncConfig() {
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>
+                  <button
+                    onClick={() => { void openEditForm(c); }}
+                    className="ml-2 px-3 py-1 text-xs font-medium rounded-md border text-muted-foreground hover:bg-muted"
+                  >
+                    <Edit2 className="h-3 w-3 mr-1" /> Edit
+                  </button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {connections.length === 0 && (
               <tr>
-                <td colSpan={5} className="py-4 text-center text-muted-foreground">
+                <td colSpan={6} className="py-4 text-center text-muted-foreground">
                   No sync connections configured. Add one to sync with external task systems.
                 </td>
               </tr>
@@ -499,22 +596,52 @@ export function McpSyncConfig() {
                     taskId: (formData.get('taskId') as string) || '',
                     externalSource: (formData.get('externalSource') as string) || '',
                     externalKey: (formData.get('externalKey') as string) || '',
-                    externalTaskTool: (formData.get('externalTaskTool') as string) || '',
+                    externalTaskTool:
+                      (formData.get('externalTaskToolManual') as string) ||
+                      (formData.get('externalTaskTool') as string) ||
+                      '',
                     syncDirection: (formData.get('syncDirection') as SyncDirection) ?? 'bidirectional',
                     conflictPolicy: (formData.get('conflictPolicy') as ConflictPolicy) ?? 'board_wins',
                   };
-                  handleCreate(data);
+                  if (editingConn) {
+                    handleUpdate(data);
+                  } else {
+                    handleCreate(data);
+                  }
                 }}
                 className="space-y-3"
-              >
-                <div>
-                  <label className="block text-sm font-medium mb-1">MCP Server ID</label>
-                  <input
+              >                <div>
+                  <label className="block text-sm font-medium mb-1">MCP Server</label>
+                  <select
                     name="serverId"
-                    defaultValue={editingConn?.serverId ?? ''}
+                    value={formServerId}
+                    onChange={(e) => {
+                      setFormServerId(e.target.value);
+                      setToolChoice('');
+                      void loadServerTools(e.target.value);
+                    }}
                     className="w-full border rounded px-2 py-1 text-sm"
                     required
-                  />
+                  >
+                    <option value="">Select an MCP server</option>
+                    {servers
+                      .filter((s) => s.status === 'connected')
+                      .map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.transport})
+                        </option>
+                      ))}
+                  </select>
+                  {servers.length === 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No MCP servers configured. Add one on the MCP Servers page first.
+                    </p>
+                  )}
+                  {servers.length > 0 && servers.every((s) => s.status !== 'connected') && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No connected MCP servers. Connect a server before adding a sync connection.
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Board Task ID</label>
@@ -547,13 +674,40 @@ export function McpSyncConfig() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">External Task Tool</label>
-                  <input
-                    name="externalTaskTool"
-                    defaultValue={editingConn?.externalTaskTool ?? ''}
-                    className="w-full border rounded px-2 py-1 text-sm"
-                    placeholder="e.g. list_tasks, get_issue"
-                    required
-                  />
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Pick a task-capable tool discovered on the selected MCP server. If the server
+                    exposes no task tools, enter the tool name manually.
+                  </p>
+                  {toolsLoading && (
+                    <p className="text-xs text-muted-foreground mb-1">Discovering tools…</p>
+                  )}
+                  {!toolsLoading && taskLikeTools.length > 0 && (
+                    <select
+                      name="externalTaskTool"
+                      value={toolChoice}
+                      onChange={(e) => setToolChoice(e.target.value)}
+                      className="w-full border rounded px-2 py-1 text-sm"
+                      required
+                    >
+                      <option value="">Select a discovered task tool</option>
+                      {taskLikeTools.map((t) => (
+                        <option key={t.name} value={t.name}>
+                          {t.name}
+                          {t.description ? ` — ${t.description}` : ''}
+                        </option>
+                      ))}
+                      <option value="__custom__">Other (enter manually)</option>
+                    </select>
+                  )}
+                  {(!toolsLoading && taskLikeTools.length === 0) || toolChoice === '__custom__' ? (
+                    <input
+                      name="externalTaskToolManual"
+                      defaultValue={toolChoice && toolChoice !== '__custom__' ? toolChoice : (editingConn?.externalTaskTool ?? '')}
+                      className="w-full border rounded px-2 py-1 text-sm"
+                      placeholder="e.g. list_tasks, get_issue"
+                      required
+                    />
+                  ) : null}
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Sync Direction</label>

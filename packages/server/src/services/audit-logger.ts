@@ -24,6 +24,7 @@ export type AuditAction =
   | 'mcp.server.disconnect'
   | 'mcp.tool.call'
   | 'mcp.sync.create'
+  | 'mcp.sync.update'
   | 'mcp.sync.run'
   | 'mcp.sync.import'
   | 'mcp.sync.export'

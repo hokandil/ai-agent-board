@@ -66,6 +66,51 @@ export function createMcpSyncRouter(repo: FullRepo, auditLogger: AuditLogger): R
     res.status(201).json(created);
   }));
 
+  // PUT /api/mcp/sync/connections/:id — update an existing sync connection
+  router.put('/connections/:id', asyncHandler(async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const conn = await repo.getConnectionById(id);
+    if (!conn) { res.status(404).json({ error: 'Sync connection not found' }); return; }
+
+    const { serverId, taskId, externalSource, externalKey, externalTaskTool,
+      syncDirection, conflictPolicy } = req.body;
+
+    const nextTaskId = taskId ?? conn.taskId;
+    const nextSource = externalSource ?? conn.externalSource;
+    const nextKey = externalKey ?? conn.externalKey;
+
+    if (!nextTaskId || !nextSource || !nextKey) {
+      res.status(400).json({ error: 'taskId, externalSource and externalKey are required' }); return;
+    }
+
+    // Reject a mapping that would collide with a different connection.
+    const byIdentity = await repo.getConnectionByExternalIdentity(nextSource, nextKey);
+    if (byIdentity && byIdentity.id !== id) {
+      res.status(409).json({ error: 'A sync connection already exists for this external task' }); return;
+    }
+    const byTask = await repo.getConnectionByTaskId(nextTaskId);
+    if (byTask && byTask.id !== id) {
+      res.status(409).json({ error: 'This task already has a sync connection' }); return;
+    }
+
+    const updates: Partial<SyncConnectionRecord> = {
+      serverId: serverId ?? conn.serverId,
+      taskId: nextTaskId,
+      externalSource: nextSource,
+      externalKey: nextKey,
+      externalTaskTool: externalTaskTool ?? conn.externalTaskTool,
+      syncDirection: syncDirection ?? conn.syncDirection,
+      conflictPolicy: conflictPolicy ?? conn.conflictPolicy,
+    };
+
+    const updated = await repo.updateConnection(id, updates);
+    if (!updated) { res.status(500).json({ error: 'Failed to update sync connection' }); return; }
+    await auditLogger.logSyncEvent(id, 'mcp.sync.update', undefined, undefined, {
+      serverId: updates.serverId, taskId: nextTaskId, externalSource: nextSource, externalKey: nextKey,
+    });
+    res.json(updated);
+  }));
+
   // POST /api/mcp/sync/connections/:id/sync — trigger a sync
   router.post('/connections/:id/sync', asyncHandler(async (req: Request, res: Response) => {
     const id = req.params.id as string;

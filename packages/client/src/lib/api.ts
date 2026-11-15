@@ -301,6 +301,20 @@ export const api = {
   }) =>
     request<SyncConnection>('/mcp/sync/connections', { method: 'POST', body: JSON.stringify(data) }),
 
+  updateSyncConnection: (id: string, data: {
+    serverId?: string;
+    taskId?: string;
+    externalSource?: string;
+    externalKey?: string;
+    externalTaskTool?: string;
+    syncDirection?: SyncDirection;
+    conflictPolicy?: ConflictPolicy;
+  }) =>
+    request<SyncConnection>(`/mcp/sync/connections/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
   syncConnection: (id: string) =>
     request<SyncResult>(`/mcp/sync/connections/${encodeURIComponent(id)}/sync`, { method: 'POST' }),
 
