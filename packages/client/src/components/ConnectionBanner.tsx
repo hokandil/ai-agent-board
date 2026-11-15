@@ -20,6 +20,7 @@ export function ConnectionBanner() {
         <motion.div
           role="status"
           aria-live="polite"
+          data-testid="connection-banner"
           initial={{ opacity: 0, height: 0 }}
           animate={{ opacity: 1, height: 'auto' }}
           exit={{ opacity: 0, height: 0 }}

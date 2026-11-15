@@ -104,20 +104,26 @@ async function request<T>(url: string, opts?: RequestInit): Promise<T> {
     });
   } catch (err: unknown) {
     // Network-level failure: the proxy/server is not reachable.
-    markBackendUnavailable();
     const detail = err instanceof Error ? err.message : String(err);
-    console.error('[API] backend unreachable:', detail);
+    console.warn('[API] request failed:', detail, 'for', url);
+    // A request can also fail because it was aborted (e.g. by a navigation).
+    // Only a corroborating health probe proves the backend is really down.
+    void probeBackend().then((healthy) => {
+      if (!healthy) markBackendUnavailable();
+    });
     throw new BackendUnavailableError(BACKEND_DOWN_MESSAGE);
   }
   if (GATEWAY_STATUSES.has(res.status)) {
+    // The proxy explicitly reported that the upstream did not answer.
     markBackendUnavailable();
-    console.error(`[API] backend gateway error ${res.status} for ${url}`);
+    console.warn(`[API] backend gateway error ${res.status} for ${url}`);
     throw new BackendUnavailableError(BACKEND_DOWN_MESSAGE, res.status);
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `HTTP ${res.status}`);
   }
+  markBackendAvailable();
   if (res.status === 204) return undefined as T;
   return res.json();
 }
@@ -495,6 +501,24 @@ let connectionStatus: ConnectionStatus = 'connecting';
 let hasConnectedOnce = false;
 const statusListeners = new Set<(status: ConnectionStatus) => void>();
 
+/**
+ * Two independent liveness signals:
+ * - `socketHealthy`: the board's WebSocket is open (the backend process and
+ *   the proxy are serving the board).
+ * - `httpHealthy`: the last REST call succeeded; `false` means a request and
+ *   a corroborating health probe both failed, so the backend is unreachable.
+ *
+ * `null` means "not known yet".
+ */
+let socketHealthy = false;
+let httpHealthy: boolean | null = null;
+
+function computeConnectionStatus(): ConnectionStatus {
+  if (httpHealthy === false) return 'disconnected';
+  if (socketHealthy) return 'connected';
+  return 'disconnected';
+}
+
 function setConnectionStatus(status: ConnectionStatus) {
   if (status === 'connected') hasConnectedOnce = true;
   if (status === connectionStatus) return;
@@ -502,13 +526,78 @@ function setConnectionStatus(status: ConnectionStatus) {
   statusListeners.forEach((fn) => fn(status));
 }
 
+/** Recompute and publish the connection state from the two liveness signals. */
+function refreshConnectionStatus() {
+  setConnectionStatus(computeConnectionStatus());
+}
+
+/** The backend answered a REST call: it is reachable. */
+function markBackendAvailable() {
+  httpHealthy = true;
+  refreshConnectionStatus();
+}
+
 /**
- * Record that the backend answered with a gateway/network failure.
- * Keeps the UI in the "backend unavailable" state until a request or the
- * WebSocket succeeds again.
+ * The backend did not answer a REST call *and* a corroborating health probe
+ * also failed, so the backend is genuinely unreachable.
  */
 function markBackendUnavailable() {
-  setConnectionStatus('disconnected');
+  httpHealthy = false;
+  refreshConnectionStatus();
+}
+
+// Health-probe throttling: one probe per failure burst, at most every 2s.
+const PROBE_MIN_INTERVAL_MS = 2000;
+let lastProbeAt = 0;
+let probeInFlight: Promise<boolean> | null = null;
+
+/**
+ * Ask the backend's health endpoint whether it is alive.
+ * Returns true when it answered, false when it did not.
+ */
+function probeBackend(): Promise<boolean> {
+  if (probeInFlight) return probeInFlight;
+  if (Date.now() - lastProbeAt < PROBE_MIN_INTERVAL_MS) {
+    // Throttled: treat as "still unknown" and keep the current state.
+    return Promise.resolve(true);
+  }
+  probeInFlight = (async () => {
+    try {
+      const res = await fetch(`${BASE}/health`, { method: 'GET', cache: 'no-store' });
+      return res.ok;
+    } catch {
+      return false;
+    } finally {
+      lastProbeAt = Date.now();
+      probeInFlight = null;
+    }
+  })();
+  return probeInFlight;
+}
+
+// Client-side heartbeat. The socket heartbeat alone can take up to a minute to
+// notice a dead backend, so the client also polls the health endpoint.
+const HEALTH_INTERVAL_MS = 10_000;
+let healthTimer: ReturnType<typeof setInterval> | null = null;
+
+async function checkBackendHealth(): Promise<void> {
+  try {
+    await fetch(`${BASE}/health`, { method: 'GET', cache: 'no-store' });
+    // The backend answered, so it is reachable whatever the status code was.
+    markBackendAvailable();
+  } catch {
+    // The heartbeat itself failed — a proven outage.
+    markBackendUnavailable();
+  }
+}
+
+function startHealthHeartbeat(): void {
+  if (healthTimer !== null) return;
+  healthTimer = setInterval(() => {
+    // Do not poll background tabs.
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    void checkBackendHealth();
+  }, HEALTH_INTERVAL_MS);
 }
 
 export function getConnectionStatus(): ConnectionStatus {
@@ -534,14 +623,20 @@ function ensureConnection() {
     url += `?token=${encodeURIComponent(API_KEY)}`;
   }
   disposed = false;
-  setConnectionStatus('connecting');
+  socketHealthy = false;
+  startHealthHeartbeat();
+  // While the socket is (re)connecting the board has no live channel to the
+  // backend, but REST may still work. Keep the last known state until one of
+  // the signals resolves.
+  if (connectionStatus === 'connecting') setConnectionStatus('connecting');
 
   ws = new WebSocket(url);
 
   ws.onopen = () => {
     console.log('[WS] connected');
     reconnectAttempt = 0;
-    setConnectionStatus('connected');
+    socketHealthy = true;
+    refreshConnectionStatus();
     reconnectListeners.forEach((fn) => {
       try { fn(); } catch (err) { console.error('[WS] reconnect listener error:', err); }
     });
@@ -556,16 +651,17 @@ function ensureConnection() {
   };
 
   ws.onclose = () => {
+    socketHealthy = false;
     if (!disposed && listeners.size > 0) {
       // Exponential backoff so a down backend does not produce a tight
       // reconnect loop against the dev proxy / reverse proxy.
       const delay = Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt);
       reconnectAttempt += 1;
       console.log(`[WS] disconnected, reconnecting in ${Math.round(delay / 1000)}s`);
-      setConnectionStatus('disconnected');
+      refreshConnectionStatus();
       reconnectTimer = setTimeout(ensureConnection, delay);
     } else {
-      setConnectionStatus('disconnected');
+      refreshConnectionStatus();
     }
   };
 
