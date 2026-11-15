@@ -57,6 +57,7 @@ const eventColorMap: Record<AgentEventType, string> = {
   test_result: 'text-emerald-500 dark:text-emerald-400',
   error: 'text-red-500 dark:text-red-400',
   complete: 'text-emerald-500 dark:text-emerald-400',
+  audit_log: 'text-purple-500 dark:text-purple-400',
 };
 
 const eventLabelMap: Record<AgentEventType, string> = {
