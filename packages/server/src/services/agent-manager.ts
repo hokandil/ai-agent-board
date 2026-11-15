@@ -21,6 +21,13 @@ import { errorMessage } from '../utils.js';
 import { gitExecFileSync } from '../routes/helpers.js';
 import { detectAvailableAgents } from './agent-detection.js';
 import { resolveTaskTimeoutMs } from './agent-timeout.js';
+import { withStartupTimeout } from '../startup.js';
+
+/** Max time to wait for a single agent provider's start() during boot. */
+const AGENT_START_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.AGENT_START_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+})();
 
 /** Structured log entry for agent lifecycle events. */
 interface AgentLogEntry {
@@ -218,7 +225,7 @@ export class AgentManager {
       const provider = this.providers.get(info.name);
       if (provider) {
         try {
-          await provider.start();
+          await withStartupTimeout(provider.start(), AGENT_START_TIMEOUT_MS, `agent provider "${info.name}" start()`);
         } catch (err: unknown) {
           agentLog({
             level: 'error',

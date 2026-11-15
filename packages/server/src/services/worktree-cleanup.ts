@@ -6,6 +6,13 @@ import { gitExecFileSync } from '../routes/helpers.js';
 import type { Task } from '../types.js';
 import type { TaskRepository } from '../repositories/types.js';
 
+/**
+ * Bound synchronous git/process inspection so a hung git (e.g. a locked repo or
+ * a credential prompt) cannot block the event loop during startup reconciliation.
+ * On timeout execFileSync throws, which the callers already treat as "blocked".
+ */
+const GIT_INSPECT_TIMEOUT_MS = 20_000;
+
 export type WorktreeCleanupResult =
   | { status: 'removed' }
   | { status: 'missing' }
@@ -40,6 +47,7 @@ export function listRegisteredWorktrees(repoPath: string): RegisteredWorktree[] 
   const output = gitExecFileSync(['worktree', 'list', '--porcelain', '-z'], {
     cwd: repoPath,
     stdio: 'pipe',
+    timeout: GIT_INSPECT_TIMEOUT_MS,
   }).toString();
   const entries: RegisteredWorktree[] = [];
   let current: RegisteredWorktree | undefined;
@@ -157,7 +165,7 @@ function inspectWorktreeProcessUseWindows(worktreePath: string): WorktreeProcess
       '-NoProfile',
       '-Command',
       'Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine',
-    ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, encoding: 'utf8' });
+    ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, encoding: 'utf8', timeout: GIT_INSPECT_TIMEOUT_MS });
     const lines = output.toString().split(/\r?\n/).filter(Boolean);
     for (const line of lines) {
       if (line.replace(/\\/g, '/').toLowerCase().includes(rootLower)) {
@@ -211,7 +219,7 @@ function inspectRegisteredPath(
     return { status: 'blocked', reason: 'The registered worktree branch does not match the task branch.' };
   }
   if (!fs.existsSync(resolvedWorktree)) {
-    try { gitExecFileSync(['worktree', 'prune'], { cwd: resolvedRepo, stdio: 'pipe' }); } catch { /* best effort */ }
+    try { gitExecFileSync(['worktree', 'prune'], { cwd: resolvedRepo, stdio: 'pipe', timeout: GIT_INSPECT_TIMEOUT_MS }); } catch { /* best effort */ }
     return { status: 'missing' };
   }
 
@@ -219,10 +227,10 @@ function inspectRegisteredPath(
   try {
     before = fs.lstatSync(resolvedWorktree);
     if (!before.isDirectory() || before.isSymbolicLink()) throw new Error('not a directory');
-    const topLevel = gitExecFileSync(['rev-parse', '--show-toplevel'], { cwd: resolvedWorktree, stdio: 'pipe' }).toString().trim();
-    const worktreeCommon = gitExecFileSync(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: resolvedWorktree, stdio: 'pipe' }).toString().trim();
-    const repoCommon = gitExecFileSync(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: resolvedRepo, stdio: 'pipe' }).toString().trim();
-    const branch = gitExecFileSync(['symbolic-ref', 'HEAD'], { cwd: resolvedWorktree, stdio: 'pipe' }).toString().trim();
+    const topLevel = gitExecFileSync(['rev-parse', '--show-toplevel'], { cwd: resolvedWorktree, stdio: 'pipe', timeout: GIT_INSPECT_TIMEOUT_MS }).toString().trim();
+    const worktreeCommon = gitExecFileSync(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: resolvedWorktree, stdio: 'pipe', timeout: GIT_INSPECT_TIMEOUT_MS }).toString().trim();
+    const repoCommon = gitExecFileSync(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: resolvedRepo, stdio: 'pipe', timeout: GIT_INSPECT_TIMEOUT_MS }).toString().trim();
+    const branch = gitExecFileSync(['symbolic-ref', 'HEAD'], { cwd: resolvedWorktree, stdio: 'pipe', timeout: GIT_INSPECT_TIMEOUT_MS }).toString().trim();
     if (normalizedPath(topLevel) !== normalizedPath(fs.realpathSync(resolvedWorktree))
       || normalizedPath(worktreeCommon) !== normalizedPath(repoCommon)
       || branch !== `refs/heads/${expectedBranch}`) {
@@ -231,7 +239,7 @@ function inspectRegisteredPath(
 
     const records = gitExecFileSync(
       ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching'],
-      { cwd: resolvedWorktree, stdio: 'pipe' },
+      { cwd: resolvedWorktree, stdio: 'pipe', timeout: GIT_INSPECT_TIMEOUT_MS },
     ).toString().split('\0').filter(Boolean);
     const unsafe = records.filter((record) => {
       const status = record.slice(0, 2);
@@ -268,6 +276,7 @@ function cleanupRegisteredPath(repoPath: string, worktreePath: string, expectedB
     gitExecFileSync(['worktree', 'remove', '--', resolvedWorktree], {
       cwd: path.resolve(repoPath),
       stdio: 'pipe',
+      timeout: GIT_INSPECT_TIMEOUT_MS,
     });
     return { status: 'removed' };
   } catch (error) {

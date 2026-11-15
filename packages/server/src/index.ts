@@ -43,10 +43,19 @@ import type { ProjectRepository } from './repositories/project-types.js';
 import { startAgentForTask } from './routes/helpers.js';
 import { isLoopbackAddress } from './network-policy.js';
 import { reconcileManagedWorktrees } from './services/worktree-cleanup.js';
+import { describeListenError, StartupProgress } from './startup.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const HOST = process.env.HOST?.trim() || '127.0.0.1';
+const startup = new StartupProgress();
+
+// Preview/test mode: skip booting real agent SDK clients AND skip auto-dispatch
+// of pending runs so starting the app never launches agents or makes paid API
+// calls on its own. Manual agent starts from the UI still work in normal dev.
+const skipAgentStartup =
+  process.env.AGENTBOARD_DISABLE_AGENT_STARTUP === '1' ||
+  process.env.AGENTBOARD_DISABLE_AGENT_STARTUP === 'true';
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:8081,http://localhost:4175,http://localhost:4176').split(',');
 app.use(cors({ origin: ALLOWED_ORIGINS }));
@@ -71,9 +80,11 @@ let auditLogger: AuditLogger;
 
 (async () => {
   // Load (and create on first run) the Agent Board config + clone root directory.
+  startup.begin('config');
   const config = loadConfig();
   console.log(`[server] clone root: ${config.cloneRoot}`);
 
+  startup.begin('database');
   if (isPostgresUrl(DATABASE_URL)) {
     // PostgreSQL backend
     const { Pool } = await import('pg');
@@ -111,6 +122,7 @@ let auditLogger: AuditLogger;
   agentManager.initEventPersistence(taskRepo);
   agentManager.initAttachmentStore(attachmentStore);
 
+  startup.begin('worktree-reconciliation');
   try {
     const projects = await projectRepo.getAllWithCounts();
     const tasks = (await Promise.all(projects.map(async (project) => {
@@ -134,6 +146,7 @@ let auditLogger: AuditLogger;
     console.error('[worktree] startup reconciliation failed:', err);
   }
 
+  startup.begin('routes');
   app.use('/api/projects', createProjectsRouter(projectRepo, taskRepo, groupRepo, agentManager));
   app.use('/api/orchestrations', createOrchestrationsRouter(taskRepo, projectRepo, agentManager));
   app.use('/api/tasks', createTaskRouter(taskRepo, agentManager, projectRepo));
@@ -153,9 +166,10 @@ let auditLogger: AuditLogger;
   app.get('/api/agents', (_req, res) => { res.json(agentManager.getAvailableAgents()); });
   app.post('/api/agents/refresh', async (_req, res, next) => { try { res.json(await agentManager.refresh()); } catch (err) { next(err); } });
 
-  // Health check (no auth required)
+  // Health check (no auth required). Reports startup readiness so a client can
+  // distinguish "listening but still initializing" from "fully ready".
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', timestamp: Date.now() });
+    res.json(startup.health());
   });
 
   // Global error handler — catches errors forwarded by asyncHandler wrappers
@@ -169,8 +183,18 @@ let auditLogger: AuditLogger;
   const server = createServer(app);
   createWSS(server);
 
+  // Surface listen failures (e.g. EADDRINUSE from an orphaned process holding
+  // the port) as an actionable diagnostic and exit cleanly, instead of staying
+  // alive without ever listening (a silent hang).
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    console.error(`[server] FATAL: ${describeListenError(err, PORT, HOST)}`);
+    process.exit(1);
+  });
+
+  startup.begin('agents');
   await agentManager.initialize();
 
+  startup.begin('recovery');
   // Recover orphaned task groups first — group children get group-aware
   // recovery (planning → idle for re-queue, executing → failed) before the
   // generic fallback below resets everything to failed.
@@ -206,12 +230,17 @@ let auditLogger: AuditLogger;
     console.error('[server] failed to recover groups:', err);
   }
 
-  // Re-dispatch durable requests left unclaimed by a crash.
+  // Re-dispatch durable requests left unclaimed by a crash. Skipped in
+  // preview/test mode so starting the app never auto-launches agents.
   const recoveredRunIds = new Set<string>();
-  for (const pending of await taskRepo.getPendingRuns(Date.now())) {
-    console.warn(`[server] recovering requested run ${pending.id}`);
-    recoveredRunIds.add(pending.id);
-    await startAgentForTask(pending, taskRepo, agentManager);
+  if (!skipAgentStartup) {
+    for (const pending of await taskRepo.getPendingRuns(Date.now())) {
+      console.warn(`[server] recovering requested run ${pending.id}`);
+      recoveredRunIds.add(pending.id);
+      await startAgentForTask(pending, taskRepo, agentManager);
+    }
+  } else {
+    console.log('[server] preview/test mode — skipping auto-dispatch of pending runs');
   }
 
   // Recover standalone tasks orphaned by a previous server restart.
@@ -232,18 +261,23 @@ let auditLogger: AuditLogger;
   }
 
   // Reclaim stale dispatch leases continuously, not only after a restart.
-  const dispatchInterval = setInterval(() => {
-    void (async () => {
-      for (const pending of await taskRepo.getPendingRuns()) {
-        if (!agentManager.isRunning(pending.id)) {
-          await startAgentForTask(pending, taskRepo, agentManager);
+  // Disabled in preview/test mode so no agents are auto-launched.
+  let dispatchInterval: NodeJS.Timeout | undefined;
+  if (!skipAgentStartup) {
+    dispatchInterval = setInterval(() => {
+      void (async () => {
+        for (const pending of await taskRepo.getPendingRuns()) {
+          if (!agentManager.isRunning(pending.id)) {
+            await startAgentForTask(pending, taskRepo, agentManager);
+          }
         }
-      }
-    })().catch((err) => console.error('[server] dispatch recovery failed:', err));
-  }, 15_000);
-  dispatchInterval.unref();
+      })().catch((err) => console.error('[server] dispatch recovery failed:', err));
+    }, 15_000);
+    dispatchInterval.unref();
+  }
 
   server.listen(PORT, HOST, () => {
+    startup.markReady();
     console.log(`[server] listening on http://${HOST}:${PORT}`);
     console.log(`[server] WebSocket at ws://${HOST}:${PORT}/ws`);
     if (process.env.API_KEY) {
@@ -260,7 +294,7 @@ let auditLogger: AuditLogger;
   // Graceful shutdown
   function shutdown() {
     console.log('[server] shutting down...');
-    clearInterval(dispatchInterval);
+    if (dispatchInterval) clearInterval(dispatchInterval);
     agentManager.shutdownAll();
     try { cleanupDb(); } catch (err) { console.error('[server] db cleanup error:', err); }
     server.close(() => process.exit(0));

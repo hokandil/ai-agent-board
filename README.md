@@ -266,6 +266,19 @@ npm run dev:client       # Vite only (port 8081)
 npm run gate:required    # required before push
 ```
 
+The server logs `[startup] phase=…` timing and reports readiness at
+`GET /api/health` (`ready`/`phase`). To **preview the UI without running agents or
+making paid API calls on startup**, set the preview flag first (Windows PowerShell):
+
+```powershell
+$env:AGENTBOARD_DISABLE_AGENT_STARTUP = "1"
+npm run dev
+```
+
+See **[DEVELOPMENT.md](DEVELOPMENT.md)** for the full local-run / product-preview
+guide, readiness checks, and Windows troubleshooting (orphaned processes, port
+conflicts, native-module rebuilds).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
