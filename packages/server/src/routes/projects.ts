@@ -9,6 +9,7 @@ import type { ProjectRepository } from '../repositories/project-types.js';
 import type { TaskRepository } from '../repositories/types.js';
 import type { TaskGroupRepository } from '../repositories/group-types.js';
 import type { AgentManager } from '../services/agent-manager.js';
+import { GitHubService } from '../services/github-service.js';
 import { broadcast } from '../websocket.js';
 import { MAX_TITLE_LENGTH, isValidAgentType, isValidPriority } from '@ai-agent-board/shared/constants.js';
 import { errorMessage } from '../utils.js';
@@ -19,8 +20,10 @@ import {
   broadcastProjectUpdate,
   cloneRepo,
   expandTilde,
+  getGitCurrentBranch,
   getGitRemoteOrigin,
   isAllowedRepoPath,
+  isGitHubRemoteUrl,
   isGitWorkTree,
   isUnderAllowedRoots,
   isValidGitRef,
@@ -240,6 +243,43 @@ export function createProjectsRouter(
     }
   }));
 
+  // GET /api/projects/repo-status — per-project repository facts.
+  // Declared before '/:id' so it is not captured by the id route.
+  //
+  // Reports the *detected* git remote of the local checkout separately from
+  // GitHub API authentication: a repo can have a GitHub origin while the host
+  // has no authenticated GitHub session.
+  router.get('/repo-status', asyncHandler(async (_req: Request, res: Response) => {
+    const projects = await projectRepo.getAllWithCounts();
+    const github = new GitHubService(taskRepo).getAuthStatus();
+    const statuses: Record<string, {
+      repoPath?: string;
+      isGitRepo: boolean;
+      remoteUrl: string | null;
+      isGitHubRemote: boolean;
+      branch: string | null;
+    }> = {};
+
+    for (const p of projects) {
+      const repoPath = p.repoPath;
+      if (!repoPath) {
+        statuses[p.id] = { isGitRepo: false, remoteUrl: null, isGitHubRemote: false, branch: null };
+        continue;
+      }
+      const isGitRepo = isGitWorkTree(repoPath);
+      const remoteUrl = isGitRepo ? getGitRemoteOrigin(repoPath) : null;
+      statuses[p.id] = {
+        repoPath,
+        isGitRepo,
+        remoteUrl,
+        isGitHubRemote: isGitHubRemoteUrl(remoteUrl),
+        branch: isGitRepo ? getGitCurrentBranch(repoPath) : null,
+      };
+    }
+
+    res.json({ statuses, github });
+  }));
+
   router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
     const id = paramId(req);
     const project = id === 'default' ? await projectRepo.getDefault() : await projectRepo.getById(id);
@@ -297,6 +337,13 @@ export function createProjectsRouter(
       }
       const repoErr = isAllowedRepoPath(expandedRepoPath);
       if (repoErr) { res.status(400).json({ error: repoErr }); return; }
+      // A local checkout may already carry a git remote (often GitHub).
+      // Record it as metadata so the project can be shown with both its local
+      // path and its upstream remote. Nothing is cloned for a local path.
+      if (isGitWorkTree(expandedRepoPath)) {
+        const origin = getGitRemoteOrigin(expandedRepoPath);
+        if (origin) storedRepoUrl = origin;
+      }
     }
 
     const now = Date.now();

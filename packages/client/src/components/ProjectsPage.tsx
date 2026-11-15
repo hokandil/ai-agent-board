@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { FolderKanban, GitBranch, Github, Pencil, Plus, Settings, Star, Trash2, X } from 'lucide-react';
-import type { CreateProjectRequest, Project, ProjectConfig, ProjectPathValidation, UpdateProjectRequest } from '@/types';
+import { FolderKanban, GitBranch, Github, Pencil, Plus, Settings, Star, Trash2, X, CheckCircle2, AlertCircle, Link2 } from 'lucide-react';
+import type { CreateProjectRequest, GitHubAuthStatus, Project, ProjectConfig, ProjectPathValidation, ProjectRepoStatus, UpdateProjectRequest } from '@/types';
+import { api } from '@/lib/api';
 import { ThemeToggle } from './ThemeToggle';
 import { ProjectDialog, type ProjectDialogInitialValues } from './ProjectDialog';
 import { ConfigDialog } from './ConfigDialog';
@@ -56,6 +57,27 @@ export function ProjectsPage({
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
   const [createInitialValues, setCreateInitialValues] = useState<ProjectDialogInitialValues | null>(null);
+  const [repoStatuses, setRepoStatuses] = useState<Record<string, ProjectRepoStatus>>({});
+  const [githubStatus, setGithubStatus] = useState<GitHubAuthStatus | null>(null);
+
+  // Repository facts (detected remote, branch) and GitHub authentication are
+  // reported separately: a GitHub origin URL does not imply an authenticated
+  // GitHub API session.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await api.getProjectRepoStatus();
+        if (cancelled) return;
+        setRepoStatuses(res.statuses ?? {});
+        setGithubStatus(res.github ?? null);
+      } catch {
+        /* best effort — the project list still renders without repo facts */
+      }
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [projects]);
 
   // Open the Create dialog prefilled when launched via a creation URI.
   useEffect(() => {
@@ -166,17 +188,74 @@ export function ProjectsPage({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <h2 className="truncate text-lg font-semibold">{project.name}</h2>
-                    {project.repoUrl && (
-                      <p className="mt-2 flex items-center gap-1 break-all font-mono text-xs text-muted-foreground">
-                        <Github className="h-3 w-3 shrink-0" />
-                        {project.repoUrl}
+
+                    {/* Local repository information */}
+                    <div className="mt-2 space-y-1">
+                      <p className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                        <FolderKanban className="h-3 w-3 shrink-0" />
+                        Local repository
                       </p>
-                    )}
-                    {project.repoPath ? (
-                      <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{project.repoPath}</p>
-                    ) : (
-                      <p className="mt-2 text-xs text-muted-foreground">Manual local paths per task</p>
-                    )}
+                      {project.repoPath ? (
+                        <p className="break-all font-mono text-xs text-muted-foreground">{project.repoPath}</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Manual local paths per task</p>
+                      )}
+                      {repoStatuses[project.id]?.branch && (
+                        <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <GitBranch className="h-3 w-3 shrink-0" />
+                          {repoStatuses[project.id].branch}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Detected remote — a fact about the checkout, not a verified link */}
+                    <div className="mt-3 space-y-1">
+                      <p className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                        <Link2 className="h-3 w-3 shrink-0" />
+                        Detected remote
+                      </p>
+                      {repoStatuses[project.id]?.remoteUrl ? (
+                        <p
+                          className="flex items-start gap-1 break-all font-mono text-xs text-muted-foreground"
+                          title="Detected from the local checkout's git origin remote"
+                        >
+                          {repoStatuses[project.id].isGitHubRemote && (
+                            <Github className="mt-0.5 h-3 w-3 shrink-0" />
+                          )}
+                          {repoStatuses[project.id].remoteUrl}
+                        </p>
+                      ) : project.repoUrl ? (
+                        <p className="flex items-start gap-1 break-all font-mono text-xs text-muted-foreground">
+                          <Github className="mt-0.5 h-3 w-3 shrink-0" />
+                          {project.repoUrl}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No git remote detected</p>
+                      )}
+                    </div>
+
+                    {/* GitHub API authentication — independent of the remote above */}
+                    <div className="mt-3 space-y-1">
+                      <p className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                        <Github className="h-3 w-3 shrink-0" />
+                        GitHub connection
+                      </p>
+                      {githubStatus === null ? (
+                        <p className="text-xs text-muted-foreground">Checking…</p>
+                      ) : githubStatus.authenticated ? (
+                        <p className="flex items-center gap-1 text-xs text-emerald-500">
+                          <CheckCircle2 className="h-3 w-3 shrink-0" />
+                          Authenticated{githubStatus.login ? ` as ${githubStatus.login}` : ''}
+                        </p>
+                      ) : (
+                        <p className="flex items-start gap-1 text-xs text-amber-500">
+                          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                          {githubStatus.cliAvailable
+                            ? 'Not authenticated — Issues, PRs and CI are unavailable'
+                            : 'GitHub CLI (gh) is not installed'}
+                        </p>
+                      )}
+                    </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     {project.isDefault && (

@@ -210,6 +210,10 @@ export interface RepoPathValidation {
   exists: boolean;
   isDirectory: boolean;
   isGitRepo: boolean;
+  /** Detected `origin` remote of the checkout, when it is a git repository. */
+  remoteUrl?: string;
+  /** True when the detected remote points at github.com. */
+  isGitHubRemote?: boolean;
   error?: string;
   warning?: string;
 }
@@ -280,12 +284,14 @@ export function validateRepoPath(repoPath: string): RepoPathValidation {
   }
 
   const isGitRepo = isGitWorkTree(resolved);
+  const remoteUrl = isGitRepo ? getGitRemoteOrigin(resolved) : null;
   return {
     repoPath: resolved,
     valid: true,
     exists: true,
     isDirectory: true,
     isGitRepo,
+    ...(remoteUrl ? { remoteUrl, isGitHubRemote: isGitHubRemoteUrl(remoteUrl) } : {}),
     ...(isGitRepo ? {} : { warning: 'Path is not a git repository; it will be initialized when saved.' }),
   };
 }
@@ -358,6 +364,30 @@ export function isGitWorkTree(repoPath: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Return the checked-out branch of a repo, or null when unavailable. */
+export function getGitCurrentBranch(repoPath: string): string | null {
+  try {
+    const out = gitExecFileSync(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoPath, stdio: 'pipe', windowsHide: true })
+      .toString()
+      .trim();
+    return out && out !== 'HEAD' ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when a remote URL points at github.com (either https or scp-like ssh).
+ * Used to distinguish "has a GitHub remote" from "has some other remote".
+ */
+export function isGitHubRemoteUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  const normalized = url.trim().replace(/\\/g, '/');
+  return /^https?:\/\/(www\.)?github\.com\//i.test(normalized)
+    || /^git@github\.com:/i.test(normalized)
+    || /^ssh:\/\/git@github\.com\//i.test(normalized);
 }
 
 // ─── Git URL parsing + cloning ──────────────────────────────────────

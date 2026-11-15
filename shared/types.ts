@@ -158,8 +158,35 @@ export interface ProjectPathValidation {
   exists: boolean;
   isDirectory: boolean;
   isGitRepo: boolean;
+  /** Detected `origin` remote of the checkout, when it is a git repository. */
+  remoteUrl?: string;
+  /** True when the detected remote points at github.com. */
+  isGitHubRemote?: boolean;
   error?: string;
   warning?: string;
+}
+
+/** GitHub CLI availability / authentication state for this host. */
+export interface GitHubAuthStatus {
+  cliAvailable: boolean;
+  authenticated: boolean;
+  login: string | null;
+  error?: string;
+}
+
+/** Per-project repository facts reported by GET /api/projects/repo-status. */
+export interface ProjectRepoStatus {
+  repoPath?: string;
+  isGitRepo: boolean;
+  /** Remote detected from the local checkout (not a verified GitHub link). */
+  remoteUrl: string | null;
+  isGitHubRemote: boolean;
+  branch: string | null;
+}
+
+export interface ProjectRepoStatusResponse {
+  statuses: Record<string, ProjectRepoStatus>;
+  github: GitHubAuthStatus;
 }
 
 export type AgentEventType =

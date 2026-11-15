@@ -19,6 +19,35 @@ export class GitHubService {
   }
 
   /**
+   * Report GitHub CLI authentication status.
+   *
+   * This is deliberately separate from "a git remote exists": a repository can
+   * have a GitHub origin URL while the machine has no authenticated GitHub
+   * session, in which case API-backed features (Issues, PRs, CI) are unusable.
+   */
+  getAuthStatus(): { cliAvailable: boolean; authenticated: boolean; login: string | null; error?: string } {
+    try {
+      const output = execFileSync('gh', ['auth', 'status'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, GH_NO_UPDATE_NOTIFIER: '1' },
+      });
+      const text = output.toString();
+      const login = /Logged in to github\.com account (\S+)/.exec(text)?.[1] ?? null;
+      return { cliAvailable: true, authenticated: true, login };
+    } catch (err: unknown) {
+      const e = err as { code?: string; stderr?: Buffer | string; message?: string };
+      const stderr = e?.stderr ? e.stderr.toString().trim() : '';
+      const cliMissing = e?.code === 'ENOENT';
+      return {
+        cliAvailable: !cliMissing,
+        authenticated: false,
+        login: null,
+        error: cliMissing ? 'GitHub CLI (gh) is not installed' : (stderr || e?.message || 'Not authenticated with GitHub'),
+      };
+    }
+  }
+
+  /**
    * Run a `gh` command and parse the JSON output.
    * Returns null if the command fails (e.g., not authenticated, no remote).
    */

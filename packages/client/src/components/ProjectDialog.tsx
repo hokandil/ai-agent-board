@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { FolderOpen, Github, HardDrive, X } from 'lucide-react';
+import { FolderOpen, Github, HardDrive, Link2, X } from 'lucide-react';
 import { isAbsoluteRepoPath, getRepoPathHelpText, getRepoPathPlaceholder } from '@/lib/utils';
 import { AGENT_OPTIONS } from '@/lib/agent-config';
 import { PRIORITY_OPTIONS } from '@/lib/priority-config';
@@ -68,6 +68,7 @@ export function ProjectDialog({
   const [nameTouched, setNameTouched] = useState(false);
   const [error, setError] = useState('');
   const [pathStatus, setPathStatus] = useState<PathStatus>({ kind: 'idle' });
+  const [detectedRemote, setDetectedRemote] = useState<{ url: string; isGitHub: boolean } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [selectingDirectory, setSelectingDirectory] = useState(false);
   const [autoSubmitPending, setAutoSubmitPending] = useState(false);
@@ -89,6 +90,7 @@ export function ProjectDialog({
     setNameTouched(Boolean(project) || Boolean(initialValues?.name));
     setError('');
     setPathStatus({ kind: 'idle' });
+    setDetectedRemote(null);
     setSubmitting(false);
     setSelectingDirectory(false);
     // Defer auto-submit to a later render so the prefilled state above is applied first.
@@ -99,10 +101,12 @@ export function ProjectDialog({
     const trimmedPath = value.trim();
     if (!trimmedPath) {
       setPathStatus({ kind: 'idle' });
+      setDetectedRemote(null);
       return true;
     }
     if (!isAbsoluteRepoPath(trimmedPath)) {
       setPathStatus({ kind: 'invalid', message: 'Local Path must be absolute' });
+      setDetectedRemote(null);
       return false;
     }
 
@@ -110,12 +114,17 @@ export function ProjectDialog({
     const result = await onValidatePath(trimmedPath);
     if (!result) {
       setPathStatus({ kind: 'invalid', message: 'Could not validate Local Path' });
+      setDetectedRemote(null);
       return false;
     }
     if (!result.valid) {
       setPathStatus({ kind: 'invalid', message: result.error ?? 'Local Path is invalid' });
+      setDetectedRemote(null);
       return false;
     }
+    setDetectedRemote(
+      result.remoteUrl ? { url: result.remoteUrl, isGitHub: result.isGitHubRemote === true } : null
+    );
     setPathStatus(result.warning
       ? { kind: 'warning', message: result.warning }
       : { kind: 'valid', message: 'Local Path is valid' });
@@ -312,6 +321,11 @@ export function ProjectDialog({
                       GitHub URL
                     </button>
                   </div>
+                  <p className="mt-1.5 text-xs text-muted-foreground/60">
+                    {sourceType === 'local'
+                      ? 'Use an existing project folder on this machine. If it is already a git checkout, its remote is detected automatically.'
+                      : 'Clone a repository into your configured clone root. If that repository already exists locally, the existing checkout is reused instead of cloning again.'}
+                  </p>
                 </div>
               )}
 
@@ -347,7 +361,7 @@ export function ProjectDialog({
                   />
                   <p className="mt-1 text-xs text-muted-foreground/60">
                     {mode === 'create'
-                      ? 'The repo is cloned into your configured clone root on create.'
+                      ? 'The repo is cloned into your configured clone root on create, unless a checkout of the same repository already exists locally.'
                       : 'Source URL the repo was cloned from (metadata only).'}
                   </p>
                 </div>
@@ -390,6 +404,19 @@ export function ProjectDialog({
                     >
                       {pathStatus.kind === 'validating' ? 'Validating Local Path…' : pathStatus.message}
                     </p>
+                  )}
+                  {detectedRemote && (
+                    <div className="mt-2 rounded-md border border-border bg-muted/30 px-2.5 py-2 text-xs">
+                      <p className="flex items-center gap-1.5 font-medium text-foreground">
+                        {detectedRemote.isGitHub ? <Github className="h-3 w-3" /> : <Link2 className="h-3 w-3" />}
+                        Existing repository detected
+                      </p>
+                      <p className="mt-1 break-all font-mono text-muted-foreground">{detectedRemote.url}</p>
+                      <p className="mt-1 text-muted-foreground">
+                        This folder is already a git checkout — the board will use it as-is and will not
+                        clone anything. The remote is recorded for reference only.
+                      </p>
+                    </div>
                   )}
                 </div>
               )}

@@ -7,6 +7,13 @@ export function createGitHubRouter(repo: TaskRepository): Router {
   const router = Router();
   const ghService = new GitHubService(repo);
 
+  // GET /api/github/status - GitHub CLI availability and authentication state.
+  // Reported separately from a repository's detected remote URL: having a
+  // GitHub origin does not mean the machine can talk to the GitHub API.
+  router.get('/status', asyncHandler(async (_req: Request, res: Response) => {
+    res.json(ghService.getAuthStatus());
+  }));
+
   // GET /api/github/tasks/:id/issues - List GitHub issues for a task's repo
   router.get('/tasks/:id/issues', asyncHandler(async (req: Request, res: Response) => {
     const id = req.params.id as string;

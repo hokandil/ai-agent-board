@@ -12,6 +12,7 @@ import type {
   CreateProjectRequest,
   UpdateProjectRequest,
   ProjectPathValidation,
+  ProjectRepoStatusResponse,
   ProjectConfig,
   MCPServer,
   MCPTool,
@@ -102,6 +103,9 @@ export const api = {
 
   getProjectConfig: () =>
     request<ProjectConfig>('/projects/config'),
+
+  getProjectRepoStatus: () =>
+    request<ProjectRepoStatusResponse>('/projects/repo-status'),
 
   updateProjectConfig: (cloneRoot: string) =>
     request<ProjectConfig>('/projects/config', { method: 'PATCH', body: JSON.stringify({ cloneRoot }) }),
