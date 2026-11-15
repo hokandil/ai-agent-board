@@ -23,6 +23,7 @@ import { createProjectsRouter } from './routes/projects.js';
 import { createOrchestrationsRouter } from './routes/orchestrations.js';
 import type { AttachmentStore } from './repositories/attachment-types.js';
 import { AgentManager } from './services/agent-manager.js';
+import { AuditLogger } from './services/audit-logger.js';
 import { authMiddleware } from './middleware/auth.js';
 import type { TaskRepository } from './repositories/types.js';
 import type { TemplateRepository } from './repositories/template-types.js';
@@ -55,6 +56,7 @@ let cleanupDb: () => void;
 
 // Initialize AgentManager
 const agentManager = new AgentManager();
+let auditLogger: AuditLogger;
 
 (async () => {
   // Load (and create on first run) the Agent Board config + clone root directory.
@@ -67,6 +69,7 @@ const agentManager = new AgentManager();
     const pool = new Pool({ connectionString: DATABASE_URL });
     await initPostgresDatabase(pool);
     taskRepo = new PostgresTaskRepository(pool);
+    auditLogger = new AuditLogger(taskRepo);
     const { PostgresProjectRepository } = await import('./repositories/postgres-projects.js');
     projectRepo = new PostgresProjectRepository(pool);
     const { PostgresTemplateRepository } = await import('./repositories/postgres-templates.js');
@@ -81,6 +84,7 @@ const agentManager = new AgentManager();
     // SQLite fallback
     const db = initDatabase();
     taskRepo = new SqliteTaskRepository(db);
+    auditLogger = new AuditLogger(taskRepo);
     const { SqliteProjectRepository } = await import('./repositories/sqlite-projects.js');
     projectRepo = new SqliteProjectRepository(db);
     const { SqliteTemplateRepository } = await import('./repositories/sqlite-templates.js');
@@ -129,7 +133,7 @@ const agentManager = new AgentManager();
   app.use('/api', createAttachmentsRouter(taskRepo, attachmentStore));
   app.use('/api/mcp', createMcpRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager));
   app.use('/api/mcp/sync', createMcpSyncRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository & import('./repositories/mcp-sync-types.js').SyncRepository));
-  app.use('/api/mcp/server', createMcpBoardServerRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager));
+  app.use('/api/mcp/server', createMcpBoardServerRouter(taskRepo as TaskRepository & import('./repositories/mcp-types.js').MCPRepository, agentManager, auditLogger));
   app.use('/api/github', createGitHubRouter(taskRepo as TaskRepository));
   app.use('/api/sessions', createSessionRouter(taskRepo as TaskRepository, agentManager));
   app.use('/api/pty/sessions', createPtySessionRouter());

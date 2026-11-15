@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { TaskRepository } from '../repositories/types.js';
 import type { MCPRepository } from '../repositories/mcp-types.js';
 import type { AgentManager } from '../services/agent-manager.js';
+import type { AuditLogger } from '../services/audit-logger.js';
 import { McpBoardServer } from '../services/mcp-board-server.js';
 import { asyncHandler } from './helpers.js';
 
@@ -20,7 +21,7 @@ type FullRepo = TaskRepository & MCPRepository;
  * on the same endpoint. It also handles session management for stateful
  * connections.
  */
-export function createMcpBoardServerRouter(repo: FullRepo, agentManager: AgentManager): Router {
+export function createMcpBoardServerRouter(repo: FullRepo, agentManager: AgentManager, auditLogger: AuditLogger): Router {
   const router = Router();
 
   // Lazy-initialize the MCP server and transport on first request.
@@ -30,7 +31,7 @@ export function createMcpBoardServerRouter(repo: FullRepo, agentManager: AgentMa
 
   function ensureInitialized(): void {
     if (!mcpBoardServer) {
-      mcpBoardServer = new McpBoardServer(repo, agentManager);
+      mcpBoardServer = new McpBoardServer(repo, agentManager, auditLogger);
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => `mcp-${randomUUID()}`,
       });

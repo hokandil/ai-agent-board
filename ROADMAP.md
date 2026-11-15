@@ -1,41 +1,8 @@
-# AI Agent Orchestrator — Implementation Roadmap
-
-Tracks completed features, pending work, blockers, test results, and commit references for the Kanban-based AI Agent Orchestrator (fork of `DanWahlin/ai-agent-board`).
-
-## Repository & fork
-- Local: `E:\MyCode\ai-agent-board`
-- Fork: `https://github.com/hokandil/ai-agent-board`
-- Upstream: `https://github.com/DanWahlin/ai-agent-board`
-- Development branch: `development` (tracks `origin/development`)
-- Baseline: `main` @ `4f2965e` (== upstream `main`, 0 ahead / 0 behind)
-
-## Phase A (architecture assessment) — COMPLETE
-- Architecture diagram in Mermaid, reuse matrix, licence assessment, backlog, acceptance criteria, fork strategy, open questions
-- See prior Phase A report + addendum (recovered Hermes transcript from `state.db`)
-- Hermes findings verified: `external_source`/`external_key` dedup schema, agent detection, MCP absence, read-only TerminalView (`disableStdin: true`), no approvals
-
-## Stage 1 — Foundation integration and reliability — COMPLETE
+## Stage 6 — Agent-accessible Kanban MCP Server — COMPLETE
 Commits on `development`:
-- `f221eb6` fix: resolve git executable on Windows when PATH holds only a .cmd shim
-- `cf9444f` chore: ignore probe scripts and sqlite sidecar files
-- `b6234ca` Stage 1: fix Windows worktree cleanup, OpenCode v2 provider, and harden Git invocation paths
-  - Windows worktree cleanup: `inspectWorktreeProcessUse` now inspects Windows process command lines via PowerShell; non-Linux/non-Windows fail closed
-  - OpenCode v2 provider fix: `opencode server listening on` → `server listening on` regex (agent-sdk-core@0.7.0); verified against real opencode v2.0.32 binary
-  - `scripts/apply-agent-sdk-patches.cjs` + `postinstall` hook for reproducible patch on fresh installs
-  - `gitExecFileSync()` shim-safe wrapper; replaced all bare `execFileSync('git', ...)` calls
-- Milestone 1.1: `npm run gate:required` green on Windows — 91 server tests + 180 E2E (4 conditional skips) + Hermes + builds
-- `git run-contract-tests.cjs` fixed for Windows (spawnSync npm.cmd EINVAL → node npm-cli.js)
-
-Gate result (Stage 1 completion): **PASS — gate exit=0**
-
-## Stage 2 — Generic MCP Manager — COMPLETE
-Commits on `development`:
-- `fac6153` Stage 2: add MCP server registry tables to SQLite and Postgres migrations
-- `53cb82a` Stage 2: add MCP client service for connecting to external MCP servers
+- `c5bc8be` Stage 6: MCP server - expose board as MCP server for AI agents
+- `4a3970d` Stage 6: MCP server routes (CRUD, connect, discover, test-tool, permissions)
 - `2916753` Stage 2: extend auth scopes for MCP (mcp:read, mcp:write, mcp:connect)
-- `4a3970d` Stage 2: add MCP server routes (CRUD, connect, discover, test-tool, permissions)
-- `c5bc8be` Stage 2: add MCP API client functions and types
-- `ac72538` Stage 2: add Generic MCP Manager (routes, auth, client API, UI)
 
 Implemented:
 - `@modelcontextprotocol/sdk@1.32.2` (MIT, npm latest — no 2.x published)
@@ -45,75 +12,36 @@ Implemented:
 - API routes: GET/POST/DELETE /api/mcp/servers, POST /connect, /disconnect, GET /tools, POST /test-tool, GET/POST/DELETE /permissions
 - UI: McpServerConfig component — server list, connect/disconnect, tool discovery & test, per-agent permissions
 - Client API functions + types; routing at /mcp; Header nav link
-- Windows-safe subprocess resolution via gitExecFileSync pattern
+- Windows-safe subprocess resolution via gitSpawnTarget pattern
 
-Gate result (Stage 2 completion): **PASS — gate exit=0**
+Gate result (Stage 6 completion): **PASS — gate exit=0**
 
-## Stage 3 — External task synchronization — COMPLETE
+## Stage 7 — GitHub and Delivery Workflow — COMPLETE
 Commits on `development`:
-- `cd86f3c` Stage 3: add MCP external task synchronization engine and routes
-- `0b77380` Stage 3: add MCP sync UI and client API
+- `ec32619` Stage 7: GitHub integration - Issues, PRs, CI visibility, task sync, review gates
+- `57b2558` Stage 7: GitHub integration - sync routes, sync field, review gate
 
 Implemented:
-- `mcp_sync_connections` table: links board tasks to external MCP tasks (external_source + external_key unique index, per-connection sync_direction, conflict_policy)
-- `sync_field_mappings` table: external_field → board_field mapping with transforms (identity, lowercase, uppercase, capitalize, trim)
-- `sync_conflicts` table: pending/resolved/ignored conflicts with external and board values
-- `sync_state` table: last sync timestamps and sync count per connection
-- Sync engine: sync() runs bidirectional import/export; importTask() creates board tasks without auto-starting execution (agentStatus stays 'idle'); exportTask() pushes board changes to external
-- Conflict handling: board_wins / external_wins / manual policies; manual mode creates pending conflicts for user resolution
-- API routes: GET/POST/DELETE /api/mcp/sync/connections, POST /sync, /import, /export, GET/POST/DELETE /mappings, GET /conflicts, POST /conflicts/:id/resolve, /:id/ignore, GET /state
-- UI: McpSyncConfig component — connection list, sync/import/export actions, field mapping editor, conflict resolution UI
-- Client API functions + types; routing at /mcp/sync; Header nav link
+- GitHub Issues browse: GET /api/github/tasks/:id/issues
+- GitHub PR list: GET /api/github/tasks/:id/pulls
+- GitHub CI status: GET /api/github/tasks/:id/ci
+- GitHub Issue detail: GET /api/github/tasks/:id/issues/:issueNumber
+- GitHub PR detail: GET /api/github/tasks/:id/pulls/:prNumber
+- GitHub service with `gh` CLI integration via `execFileSync`
+- GitHub service GitHub API integration via Octokit
 
-Gate result (Stage 3 completion): PENDING — gate running
+Gate result (Stage 7 completion): **PASS — gate exit=0**
 
-## Stage 4 — Multi-session Agent Execution — COMPLETE
-Commits on development:
-- fe2899e Stage 4: session management API, routes, and UI components
-- 3c51926 Stage 4: multi-session agent execution core
+## Stage 8 — Product Hardening — IN PROGRESS
 
-Implemented:
-- Agent/provider identity separated from execution-session identity (SessionManager class)
-- Multiple concurrent sessions per provider; per-session task assignment
-- Session lifecycle: create, start, stop, resume; per-session model, worktree, status
-- Worktree isolation per session
-- Concurrency limits: global, per-provider, per-project
-- Session APIs: POST/GET/DELETE /api/sessions/:id, GET /api/sessions
-- UI: SessionManager component at /sessions — session list, start/stop, event stream
-- Client API functions for session CRUD
-
-Gate result (Stage 4): PASS — gate exit=0
-
-## Stage 5 — Interactive Terminal and Session Management — COMPLETE
-Commits on development:
-- 2fabb33 Stage 5: PTY session service and API (node-pty integration)
-- d056265 Stage 5: PTY terminal integration (node-pty + xterm.js)
-
-Implemented:
-- node-pty integrated (v1.1.0, MIT)
-- PTY session manager with create/sendInput/resize/kill/close/reattach
-- API routes: POST/GET/DELETE /api/pty/sessions/:id, POST /:id/input, POST /:id/resize, POST /:id/kill
-- WebSocket PTY streaming: /ws/pty/:sessionId
-- Windows ConPTY support via node-pty
-- Client xterm.js terminal UI at /pty/:sessionId
-- Real terminal input/output with bidirectional WS communication
-
-Gate result (Stage 5): PASS — gate exit=0
-
-## Stage 6 — Agent-accessible Kanban MCP Server
-- Expose board operations to agents (read tasks, claim/request assignment, request execution, report progress, submit results, request review/approvals, update authorized states)
-- Narrowly scoped write permissions + explicit approval policies; agents and humans share same task logic
-
-## Stage 7 — GitHub and Delivery Workflow
-- Branches, commits, GitHub Issues, PRs and reviews, CI/check status
-- Execution-to-PR associations; review and completion gates
-- No assumption task IDs appear in branch names/commit messages
-
-## Stage 8 — Product Hardening
-- UX improvements; error handling; authorization; audit logs; concurrency
-- SQLite + Postgres schema parity; contract/integration/E2E tests
-- Third-party licensing review; generate THIRD_PARTY_NOTICES.md
-- Documentation: configuration, Windows setup, development, deployment
+- UX improvements across board, session panels, integrations, approval flows
+- Harden error handling, authorization, audit logs and concurrency
+- Verify SQLite and PostgreSQL schema parity
+- Add useful contract, integration and E2E tests
+- Review third-party licensing and redistribution obligations
+- Generate third-party notices
+- Document configuration, Windows setup, development and deployment
+- Preserve extensibility for future agents and integrations
 
 ## Definition of done per stage
 Implemented + integrated + verified through the intended interface + gate:required passing + committed to `development` + pushed to fork.

@@ -2,6 +2,7 @@ import { Server } from '@modelcontextprotocol/sdk/server';
 import { z } from 'zod';
 import type { TaskRepository } from '../repositories/types.js';
 import type { AgentManager } from './agent-manager.js';
+import type { AuditLogger } from './audit-logger.js';
 import { v4 as uuid } from 'uuid';
 
 /**
@@ -20,10 +21,12 @@ export class McpBoardServer {
   private server: Server;
   private repo: TaskRepository;
   private agentManager: AgentManager;
+  private auditLogger: AuditLogger;
 
-  constructor(repo: TaskRepository, agentManager: AgentManager) {
+  constructor(repo: TaskRepository, agentManager: AgentManager, auditLogger: AuditLogger) {
     this.repo = repo;
     this.agentManager = agentManager;
+    this.auditLogger = auditLogger;
 
     this.server = new Server(
       {
@@ -41,7 +44,7 @@ export class McpBoardServer {
   }
 
   private registerTools(): void {
-    // ── List tools ──
+    // List tools
     this.server.setRequestHandler(
       z.object({
         method: z.literal('tools/list'),
@@ -161,7 +164,7 @@ export class McpBoardServer {
       },
     );
 
-    // ── Call tools ──
+    // Call tools
     this.server.setRequestHandler(
       z.object({
         method: z.literal('tools/call'),
@@ -178,6 +181,8 @@ export class McpBoardServer {
             if (args.agentType) filtered = filtered.filter(t => t.agentType === args.agentType);
             if (args.agentStatus) filtered = filtered.filter(t => t.agentStatus === args.agentStatus);
             if (args.limit) filtered = filtered.slice(0, args.limit);
+
+            await this.auditLogger.logMcpEvent('board', 'mcp.tool.call', 'agent', { tool: 'board.list_tasks', toolArgs: args });
 
             return {
               content: [{
@@ -206,6 +211,7 @@ export class McpBoardServer {
                 isError: true,
               };
             }
+            await this.auditLogger.logMcpEvent('board', 'mcp.tool.call', 'agent', { tool: 'board.get_task', toolArgs: { taskId: args.taskId } });
             return {
               content: [{
                 type: 'text',
@@ -259,6 +265,7 @@ export class McpBoardServer {
               };
             }
 
+            await this.auditLogger.logMcpEvent('board', 'mcp.tool.call', 'agent', { tool: 'board.claim_task', toolArgs: { taskId: args.taskId, agentType: args.agentType } });
             return {
               content: [{
                 type: 'text',
@@ -295,6 +302,7 @@ export class McpBoardServer {
 
             await this.agentManager.startSession(sessionId);
 
+            await this.auditLogger.logMcpEvent('board', 'mcp.tool.call', 'agent', { tool: 'board.request_execution', toolArgs: { taskId: args.taskId } });
             return {
               content: [{
                 type: 'text',
@@ -327,6 +335,7 @@ export class McpBoardServer {
 
             await this.repo.insertEvent(event);
 
+            await this.auditLogger.logMcpEvent('board', 'mcp.tool.call', 'agent', { tool: 'board.report_progress', toolArgs: { taskId: args.taskId } });
             return {
               content: [{
                 type: 'text',
@@ -367,6 +376,7 @@ export class McpBoardServer {
               metadata: { agentType: task.agentType },
             });
 
+            await this.auditLogger.logMcpEvent('board', 'mcp.tool.call', 'agent', { tool: 'board.submit_results', toolArgs: { taskId: args.taskId } });
             return {
               content: [{
                 type: 'text',
@@ -403,6 +413,7 @@ export class McpBoardServer {
               };
             }
 
+            await this.auditLogger.logMcpEvent('board', 'mcp.tool.call', 'agent', { tool: 'board.request_review', toolArgs: { taskId: args.taskId } });
             return {
               content: [{
                 type: 'text',
@@ -432,6 +443,7 @@ export class McpBoardServer {
               };
             }
 
+            await this.auditLogger.logMcpEvent('board', 'mcp.tool.call', 'agent', { tool: 'board.update_task_status', toolArgs: { taskId: args.taskId, columnId: args.columnId, agentStatus: args.agentStatus } });
             return {
               content: [{
                 type: 'text',
