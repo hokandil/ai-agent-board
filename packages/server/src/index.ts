@@ -1,4 +1,15 @@
 import 'dotenv/config';
+
+// Process-level error handlers to prevent crashes from unhandled agent SDK errors.
+process.on('uncaughtException', (err: Error) => {
+  console.error('[server] uncaught exception:', err.message);
+  console.error(err.stack);
+});
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('[server] unhandled rejection:', reason instanceof Error ? reason.message : String(reason));
+  if (reason instanceof Error) console.error(reason.stack);
+});
+
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
