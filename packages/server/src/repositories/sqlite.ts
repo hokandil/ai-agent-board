@@ -124,7 +124,7 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
       getById: db.prepare('SELECT * FROM tasks WHERE id = ?'),
       insert: db.prepare(`
         INSERT INTO tasks (id, project_id, title, description, priority, column_id, agent_status, agent_type, created_at, started_at, completed_at,
-          repo_path, branch_name, base_branch, use_worktree, worktree_path, archived, group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id)
+          repo_path, branch_name, base_branch, use_worktree, worktree_path, archived, group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id, agent_profile_id, agent_profile_snapshot)
         VALUES (@id, @project_id, @title, @description, @priority, @column_id, @agent_status, @agent_type, @created_at, @started_at, @completed_at,
           @repo_path, @branch_name, @base_branch, @use_worktree, @worktree_path, @archived, @group_id, @group_order, @summary, @external_source, @external_key, @provenance, @run_requested_at, @run_claimed_at, @timeout_minutes, @agent_session_id, @agent_profile_id, @agent_profile_snapshot)
       `),
@@ -613,7 +613,9 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
     const existing = await this.getAgentProfile(id);
     if (!existing) return undefined;
     const now = Date.now();
-    const merged: AgentProfile = { ...existing, ...updates, updatedAt: now };
+    // Ignore keys with undefined values so PATCH-style updates only change supplied fields.
+    const filtered = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined)) as typeof updates;
+    const merged: AgentProfile = { ...existing, ...filtered, updatedAt: now };
     this.db.prepare(`
       UPDATE agent_profiles SET
         name = @name, provider = @provider, model = @model, instructions = @instructions,

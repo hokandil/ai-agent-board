@@ -607,13 +607,16 @@ export function validateTaskFields(body: Record<string, any>): string | null {
   if (timeoutMinutes !== undefined && !isValidAgentTimeoutMinutes(timeoutMinutes)) {
     return `timeoutMinutes must be an integer between ${MIN_AGENT_TIMEOUT_MINUTES} and ${MAX_AGENT_TIMEOUT_MINUTES}`;
   }
+  if (body.agentProfileId !== undefined && (typeof body.agentProfileId !== 'string' || !body.agentProfileId.trim())) {
+    return 'agentProfileId must be a non-empty string';
+  }
   return null;
 }
 
 // ─── Task builder ───────────────────────────────────────────────────
 
 export function buildTask(body: Record<string, any>): Task {
-  const { title, description, priority, columnId, agentType, repoPath, branchName, baseBranch, useWorktree, projectId, timeoutMinutes } = body;
+  const { title, description, priority, columnId, agentType, repoPath, branchName, baseBranch, useWorktree, projectId, timeoutMinutes, agentProfileId } = body;
   return {
     id: uuid(),
     projectId: typeof projectId === 'string' && projectId ? projectId : 'default',
@@ -629,6 +632,7 @@ export function buildTask(body: Record<string, any>): Task {
     baseBranch: baseBranch || undefined,
     useWorktree: useWorktree ?? undefined, externalSource: body.externalSource, externalKey: body.externalKey, provenance: body.provenance, runRequestedAt: body.runRequestedAt,
     timeoutMinutes,
+    agentProfileId: typeof agentProfileId === 'string' ? agentProfileId : undefined,
   };
 }
 

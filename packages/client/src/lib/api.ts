@@ -314,9 +314,9 @@ export const api = {
 
   // --- Agent profiles ---
   getAgentProfiles: () =>
-    request<AgentProfile[]>('/api/agent-profiles'),
+    request<AgentProfile[]>('/agent-profiles'),
   getAgentProfile: (id: string) =>
-    request<AgentProfile>(`/api/agent-profiles/${encodeURIComponent(id)}`),
+    request<AgentProfile>(`/agent-profiles/${encodeURIComponent(id)}`),
   createAgentProfile: (data: {
     name: string;
     provider: AgentType;
@@ -326,7 +326,7 @@ export const api = {
     skillIds: string[];
     enabled: boolean;
   }) =>
-    request<AgentProfile>('/api/agent-profiles', { method: 'POST', body: JSON.stringify(data) }),
+    request<AgentProfile>('/agent-profiles', { method: 'POST', body: JSON.stringify(data) }),
   updateAgentProfile: (id: string, data: {
     name?: string;
     provider?: AgentType;
@@ -336,9 +336,9 @@ export const api = {
     skillIds?: string[];
     enabled?: boolean;
   }) =>
-    request<AgentProfile>(`/api/agent-profiles/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    request<AgentProfile>(`/agent-profiles/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteAgentProfile: (id: string) =>
-    request<void>(`/api/agent-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    request<void>(`/agent-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   updateMcpServer: (id: string, data: {
     name?: string;

@@ -65,7 +65,24 @@ export function migrateSqliteDatabase(db: Database.Database): void {
       started_at    INTEGER,
       completed_at  INTEGER,
       summary       TEXT,
-      agent_profile_id      TEXT REFERENCES agent_profiles(id),
+      repo_path     TEXT,
+      branch_name   TEXT,
+      base_branch   TEXT,
+      use_worktree  INTEGER,
+      worktree_path TEXT,
+      agent_type    TEXT NOT NULL DEFAULT 'copilot',
+      archived      INTEGER NOT NULL DEFAULT 0,
+      project_id    TEXT NOT NULL DEFAULT 'default',
+      group_id      TEXT REFERENCES task_groups(id) ON DELETE CASCADE,
+      group_order   INTEGER,
+      external_source TEXT,
+      external_key TEXT,
+      provenance TEXT,
+      run_requested_at INTEGER,
+      run_claimed_at INTEGER,
+      timeout_minutes INTEGER,
+      agent_session_id TEXT,
+      agent_profile_id      TEXT,
       agent_profile_snapshot TEXT
     )
   `);
@@ -586,6 +603,8 @@ function ensureSqliteProjectForeignKeys(db: Database.Database): void {
         run_claimed_at INTEGER,
         timeout_minutes INTEGER,
         agent_session_id TEXT,
+        agent_profile_id TEXT,
+        agent_profile_snapshot TEXT,
         FOREIGN KEY (project_id) REFERENCES projects(id),
         FOREIGN KEY (group_id) REFERENCES task_groups(id) ON DELETE CASCADE
       );
@@ -594,13 +613,15 @@ function ensureSqliteProjectForeignKeys(db: Database.Database): void {
         id, title, description, priority, column_id, agent_status, created_at,
         started_at, completed_at, repo_path, branch_name, base_branch, use_worktree,
         worktree_path, agent_type, archived, project_id, group_id, group_order, summary,
-        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id
+        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id,
+        agent_profile_id, agent_profile_snapshot
       )
       SELECT
         id, title, description, priority, column_id, agent_status, created_at,
         started_at, completed_at, repo_path, branch_name, base_branch, use_worktree,
         worktree_path, agent_type, archived, project_id, group_id, group_order, summary,
-        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id
+        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id,
+        agent_profile_id, agent_profile_snapshot
       FROM tasks;
 
       DROP TABLE tasks;

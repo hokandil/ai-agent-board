@@ -47,6 +47,13 @@ export function createTaskRouter(repo: TaskRepository, agentManager: AgentManage
     const idempotencyKey = req.header('Idempotency-Key')?.trim();
     if (idempotencyKey && idempotencyKey.length > 200) { res.status(400).json({ error: 'Idempotency-Key is too long' }); return; }
     const task = buildTask({ ...body, externalSource: idempotencyKey ? (req.body.externalSource || 'api') : req.body.externalSource, externalKey: idempotencyKey || req.body.externalKey, provenance: sanitizeProvenance(req.body.provenance) });
+    // If an agentProfileId was supplied, snapshot the profile so a later profile edit
+    // does not change this task's execution configuration.
+    if (task.agentProfileId) {
+      const profile = await repo.getAgentProfile(task.agentProfileId);
+      if (!profile) { res.status(400).json({ error: `agent profile not found: ${task.agentProfileId}` }); return; }
+      task.agentProfileSnapshot = profile;
+    }
     const creation = await repo.createIdempotent(task);
     if (!creation.created) { res.status(200).set('Idempotent-Replay', 'true').json(creation.task); return; }
     broadcastTaskUpdate(task);

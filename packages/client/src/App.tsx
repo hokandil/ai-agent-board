@@ -634,6 +634,10 @@ export function App() {
     return <SessionManager />;
   }
 
+  if (route.view === 'agents') {
+    return <AgentsPage />;
+  }
+
   if (route.view === 'pty') {
     return <PtyTerminal sessionId={route.sessionId} />;
   }
@@ -669,10 +673,6 @@ export function App() {
         Loading project…
       </div>
     );
-  }
-
-  if (route.view === 'agents') {
-    return <AgentsPage />;
   }
 
   return (

@@ -117,6 +117,27 @@ const PATCHES = [
     replace: 'cwd: config.workingDirectory,',
     with: 'cwd: config.workingDirectory, ...(config.skills ? { skills: config.skills, settingSources: config.settingSources } : {}),',
   },
+  {
+    // Stage E: deliver per-session model override to Copilot.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/copilot.js',
+    replace: '...(this.modelOverride ? { model: this.modelOverride } : {})',
+    with: '...(config.model || this.modelOverride ? { model: config.model || this.modelOverride } : {})',
+  },
+  {
+    // Stage E: deliver per-session model override to Claude.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/claude.js',
+    replace: 'const model = this.modelOverride;',
+    with: 'const model = config.model || this.modelOverride;',
+  },
+  {
+    // Stage E: deliver per-session model override to Codex.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/codex.js',
+    replace: '...(this.modelOverride ? { model: this.modelOverride } : {})',
+    with: '...(config.model || this.modelOverride ? { model: config.model || this.modelOverride } : {})',
+  },
 ];
 
 const repoRoot = path.resolve(__dirname, '..');

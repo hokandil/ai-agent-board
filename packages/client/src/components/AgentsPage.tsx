@@ -202,8 +202,9 @@ export function AgentsPage() {
             </div>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium">Name</label>
+                <label htmlFor="profile-name" className="block text-sm font-medium">Name</label>
                 <input
+                  id="profile-name"
                   name="name"
                   defaultValue={editingProfile?.name ?? ''}
                   className="mt-1 block w-full rounded-md border border-gray-300 py-2 pl-3 pr-10 text-sm"
@@ -211,8 +212,9 @@ export function AgentsPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium">Provider</label>
+                <label htmlFor="profile-provider" className="block text-sm font-medium">Provider</label>
                 <select
+                  id="profile-provider"
                   name="provider"
                   defaultValue={editingProfile?.provider ?? 'copilot'}
                   className="mt-1 block w-full rounded-md border border-gray-300 py-2 pl-3 pr-10 text-sm"
@@ -223,8 +225,9 @@ export function AgentsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium">Model (optional)</label>
+                <label htmlFor="profile-model" className="block text-sm font-medium">Model (optional)</label>
                 <input
+                  id="profile-model"
                   name="model"
                   defaultValue={editingProfile?.model ?? ''}
                   placeholder="e.g. claude-3-5-sonnet-20241022"
@@ -232,8 +235,9 @@ export function AgentsPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium">Instructions / persona (optional)</label>
+                <label htmlFor="profile-instructions" className="block text-sm font-medium">Instructions / persona (optional)</label>
                 <textarea
+                  id="profile-instructions"
                   name="instructions"
                   defaultValue={editingProfile?.instructions ?? ''}
                   rows={4}

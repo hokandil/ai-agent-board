@@ -398,6 +398,9 @@ export class AgentManager {
     }
 
     const effectiveAgentType = profile?.provider ?? entry.agentType;
+    // The profile's provider is the agent that actually executes; align the session entry so
+    // provider selection, concurrency counters, hooks, and logs all use it consistently.
+    entry.agentType = effectiveAgentType;
     const provider = this.providers.get(effectiveAgentType);
     if (!provider) {
       entry.status = 'failed';
@@ -442,7 +445,7 @@ export class AgentManager {
     }
 
     // Increment concurrency counters
-    this.providerSessionCounts.set(entry.agentType, (this.providerSessionCounts.get(entry.agentType) || 0) + 1);
+    this.providerSessionCounts.set(effectiveAgentType, (this.providerSessionCounts.get(effectiveAgentType) || 0) + 1);
     if (task.projectId) {
       this.projectSessionCounts.set(task.projectId, (this.projectSessionCounts.get(task.projectId) || 0) + 1);
     }
@@ -612,20 +615,20 @@ Optional list of any work you did not complete or that should be followed up. Om
         // agent-type discovery when no profile selects them.
         let mcpServers: unknown;
         if (profile?.mcpServerIds?.length && this.mcpRepo) {
-          mcpServers = await buildMcpServersForProfile(this.mcpRepo!, entry.agentType, profile);
+          mcpServers = await buildMcpServersForProfile(this.mcpRepo!, effectiveAgentType, profile);
         } else if (this.mcpRepo) {
-          mcpServers = await buildMcpServersForAgent(this.mcpRepo, entry.agentType);
+          mcpServers = await buildMcpServersForAgent(this.mcpRepo, effectiveAgentType);
         }
 
         // Stage D: deliver local skills to providers that support them. A profile's
         // skillIds take precedence over auto-discovery.
         const discoveredSkills = discoverSkills();
-        const skillDirectories = entry.agentType === 'copilot' && (profile?.skillIds?.length ?? discoveredSkills.length) > 0
+        const skillDirectories = effectiveAgentType === 'copilot' && (profile?.skillIds?.length ?? discoveredSkills.length) > 0
           ? [getSkillsRoot()] : undefined;
-        const claudeSkills = entry.agentType === 'claude'
+        const claudeSkills = effectiveAgentType === 'claude'
           ? (profile?.skillIds?.length ? profile.skillIds : discoveredSkills.map((s) => s.name))
           : [];
-        const claudeSkillsToUse = entry.agentType === 'claude' && claudeSkills.length > 0 ? claudeSkills : undefined;
+        const claudeSkillsToUse = effectiveAgentType === 'claude' && claudeSkills.length > 0 ? claudeSkills : undefined;
 
         const coreSession = await provider.createSession({
           contextId: sessionId,
@@ -633,6 +636,7 @@ Optional list of any work you did not complete or that should be followed up. Om
           repoPath: task.repoPath,
           resumeSessionId: entry.resumeProviderSessionId,
           systemPrompt,
+          ...(profile?.model ? { model: profile.model } : {}),
           ...(mcpServers !== undefined ? { mcpServers } : {}),
           ...(skillDirectories !== undefined ? { skillDirectories } : {}),
           ...(claudeSkillsToUse !== undefined ? { skills: claudeSkillsToUse, settingSources: ['user', 'project', 'local'] } : {}),
@@ -641,7 +645,7 @@ Optional list of any work you did not complete or that should be followed up. Om
           // the user's explicit decision is awaited (never auto-approved). The async hook is
           // awaited by the patched providers. Codex exposes only a config approval policy
           // (limitation surfaced, not auto-approved).
-          hooks: (['hermes', 'openclaw', 'grok', 'copilot', 'claude', 'opencode'].includes(entry.agentType)
+          hooks: (['hermes', 'openclaw', 'grok', 'copilot', 'claude', 'opencode'].includes(effectiveAgentType)
             ? {
                 onPermissionRequest: (req: { kind: string; tool?: string }) =>
                   this.requestPermission(task.id, sessionId, req.kind, req.tool).then((decision) => ({
