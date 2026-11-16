@@ -655,6 +655,22 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
     return perm?.allowed ?? false;
   }
 
+  async getOAuthData(serverId: string): Promise<string | undefined> {
+    const { rows } = await this.pool.query<{ data: string | null }>('SELECT data FROM mcp_oauth WHERE server_id = $1', [serverId]);
+    return rows[0]?.data ?? undefined;
+  }
+
+  async setOAuthData(serverId: string, data: string): Promise<void> {
+    await this.pool.query(`
+      INSERT INTO mcp_oauth (server_id, data, updated_at) VALUES ($1, $2, $3)
+      ON CONFLICT (server_id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at
+    `, [serverId, data, Date.now()]);
+  }
+
+  async deleteOAuthData(serverId: string): Promise<void> {
+    await this.pool.query('DELETE FROM mcp_oauth WHERE server_id = $1', [serverId]);
+  }
+
   // ─── MCP Sync repository ──────────────────────────────────────────────
 
   async getAllConnections(): Promise<SyncConnectionRecord[]> {

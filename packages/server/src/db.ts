@@ -363,6 +363,16 @@ export function migrateSqliteDatabase(db: Database.Database): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_server ON mcp_permissions(server_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_agent ON mcp_permissions(agent_type)`);
 
+  // OAuth authorization state per MCP server (client registration + tokens + discovery).
+  // `data` is an encrypted JSON envelope; never stored in plaintext when a key is configured.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_oauth (
+      server_id  TEXT PRIMARY KEY REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      data       TEXT,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+
   // Migrate any plaintext MCP credentials to encrypted storage.
   // Rerunnable: only re-encrypts values that are not already in the encrypted envelope format.
   if (isEncryptionConfigured()) {
@@ -942,6 +952,14 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_server ON mcp_permissions(server_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_mcp_permissions_agent ON mcp_permissions(agent_type)`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mcp_oauth (
+      server_id  TEXT PRIMARY KEY REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      data       TEXT,
+      updated_at BIGINT NOT NULL
+    )
+  `);
 
   // Migrate any plaintext MCP credentials to encrypted storage.
   // Rerunnable: only re-encrypts values that are not already in the encrypted envelope format.

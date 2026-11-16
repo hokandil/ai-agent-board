@@ -57,4 +57,9 @@ export interface MCPRepository {
 
   // Permission check
   isToolAllowed(serverId: string, agentType: string, toolName: string): Promise<boolean>;
+
+  // OAuth authorization state. `data` is an opaque (encrypted) envelope persisted as-is.
+  getOAuthData(serverId: string): Promise<string | undefined>;
+  setOAuthData(serverId: string, data: string): Promise<void>;
+  deleteOAuthData(serverId: string): Promise<void>;
 }

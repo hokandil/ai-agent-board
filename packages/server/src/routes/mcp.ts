@@ -7,6 +7,7 @@ import type { AgentManager } from '../services/agent-manager.js';
 import type { AuditLogger } from '../services/audit-logger.js';
 import { redactSensitive } from '../services/audit-logger.js';
 import { mcpClientManager } from '../services/mcp-client.js';
+import { McpOAuthManager } from '../services/mcp-oauth.js';
 import { MCP_CREDENTIAL_CLEAR } from '@ai-agent-board/shared/constants.js';
 import { asyncHandler } from './helpers.js';
 
@@ -83,6 +84,7 @@ function redactMcpCredentials(creds: Record<string, string>): Record<string, str
 
 export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManager: AgentManager, auditLogger: AuditLogger): Router {
   const router = Router();
+  const oauth = new McpOAuthManager(repo);
 
   // ─── MCP Server CRUD ───────────────────────────────────────────────────
 
@@ -219,6 +221,7 @@ export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManag
         env: server.env,
         cwd: server.cwd,
         headers: server.headers,
+        authProvider: await oauth.getAuthorizedProvider(id),
       });
 
       // Update status in DB
@@ -230,6 +233,35 @@ export function createMcpRouter(repo: TaskRepository & MCPRepository, agentManag
       await repo.updateServer(id, { status: 'error', last_error: message });
       res.status(500).json({ error: `Failed to connect to MCP server: ${message}` });
     }
+  }));
+
+  // ─── Interactive MCP OAuth ─────────────────────────────────────────────
+
+  // POST /api/mcp/servers/:id/oauth/start — discover + register + return authorization URL.
+  router.post('/servers/:id/oauth/start', asyncHandler(async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const server = await repo.getServerById(id);
+    if (!server) { res.status(404).json({ error: 'MCP server not found' }); return; }
+    if (!server.url || (server.transport !== 'streamable-http' && server.transport !== 'sse')) {
+      res.status(400).json({ error: 'OAuth login is only available for HTTP/SSE MCP servers' }); return;
+    }
+    const result = await oauth.start(id, server.url);
+    res.json(result);
+  }));
+
+  // GET /api/mcp/servers/:id/oauth/status — current authorization state.
+  router.get('/servers/:id/oauth/status', asyncHandler(async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    if (!await repo.getServerById(id)) { res.status(404).json({ error: 'MCP server not found' }); return; }
+    res.json(await oauth.status(id));
+  }));
+
+  // POST /api/mcp/servers/:id/oauth/revoke — clear stored authorization + disconnect.
+  router.post('/servers/:id/oauth/revoke', asyncHandler(async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    if (!await repo.getServerById(id)) { res.status(404).json({ error: 'MCP server not found' }); return; }
+    await oauth.revoke(id);
+    res.json({ revoked: true });
   }));
 
   // POST /api/mcp/servers/:id/disconnect — disconnect from an MCP server

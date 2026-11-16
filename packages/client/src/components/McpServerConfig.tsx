@@ -21,6 +21,7 @@ export function McpServerConfig(_props: {
 }) {
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [oauthPending, setOauthPending] = useState<Set<string>>(new Set());
   const [openForm, setOpenForm] = useState(false);
   const [editingServer, setEditingServer] = useState<MCPServer | null>(null);
   const [deletingServer, setDeletingServer] = useState<string | null>(null);
@@ -101,8 +102,29 @@ export function McpServerConfig(_props: {
     loadPermissions();
   }, [loadServers, loadAgentTypes, loadPermissions]);
 
+  const clearOauthPending = useCallback((id: string) => {
+    setOauthPending((prev) => { const n = new Set(prev); n.delete(id); return n; });
+  }, []);
+
+  const pollOAuth = useCallback((id: string) => {
+    const started = Date.now();
+    const timer = setInterval(async () => {
+      try {
+        const st = await api.getMcpOAuthStatus(id);
+        if (st.status === 'authorized') {
+          clearInterval(timer); clearOauthPending(id); await loadServers();
+        } else if (st.status === 'error') {
+          clearInterval(timer); clearOauthPending(id); setError(st.error ?? 'Authorization failed');
+        } else if (Date.now() - started > 120_000) {
+          clearInterval(timer); clearOauthPending(id); setError('Authorization timed out. Click Connect to retry.');
+        }
+      } catch { /* transient; keep polling */ }
+    }, 1500);
+  }, [loadServers, clearOauthPending]);
+
   const handleConnect = useCallback(async (id: string) => {
     setError(null);
+    const server = servers.find((s) => s.id === id);
     try {
       await api.connectMcpServer(id);
       await loadServers();
@@ -111,9 +133,37 @@ export function McpServerConfig(_props: {
         setTools(data.tools);
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to connect');
+      const msg = err instanceof Error ? err.message : 'Failed to connect';
+      const isHttp = server && (server.transport === 'streamable-http' || server.transport === 'sse');
+      if (isHttp) {
+        // Interactive OAuth: open the provider's login in the browser, then reconnect.
+        try {
+          const start = await api.startMcpOAuth(id);
+          if (start.authorizationUrl) {
+            window.open(start.authorizationUrl, '_blank', 'noopener');
+            setOauthPending((prev) => new Set(prev).add(id));
+            pollOAuth(id);
+            return;
+          }
+          if (start.status === 'authorized') { await loadServers(); return; }
+          setError(`${start.error ?? msg} — if this server does not support OAuth login, add an Authorization header via Edit.`);
+        } catch { setError(msg); }
+      } else {
+        setError(msg);
+      }
     }
-  }, [loadServers, selectedServerId]);
+  }, [loadServers, selectedServerId, servers, pollOAuth]);
+
+  const handleRevokeOAuth = useCallback(async (id: string) => {
+    setError(null);
+    try {
+      await api.revokeMcpOAuth(id);
+      clearOauthPending(id);
+      await loadServers();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to revoke authorization');
+    }
+  }, [loadServers, clearOauthPending]);
 
   const handleDisconnect = useCallback(async (id: string) => {
     setError(null);
@@ -311,11 +361,12 @@ export function McpServerConfig(_props: {
                       <>
                         <button
                           onClick={() => handleConnect(s.id)}
-                          className="px-3 py-1 text-xs font-medium rounded-md border bg-green-500/10 text-green-600 hover:bg-green-500/20"
+                          disabled={oauthPending.has(s.id)}
+                          className="px-3 py-1 text-xs font-medium rounded-md border bg-green-500/10 text-green-600 hover:bg-green-500/20 disabled:opacity-60"
                         >
-                          Connect
+                          {oauthPending.has(s.id) ? 'Awaiting login…' : 'Connect'}
                         </button>
-                        {hasError(s) && (
+                        {hasError(s) && !oauthPending.has(s.id) && (
                           <button
                             onClick={() => handleConnect(s.id)}
                             className="ml-1 px-3 py-1 text-xs font-medium rounded-md border bg-orange-500/10 text-orange-600 hover:bg-orange-500/20"
@@ -330,6 +381,15 @@ export function McpServerConfig(_props: {
                         className="px-3 py-1 text-xs font-medium rounded-md border bg-red-500/10 text-red-600 hover:bg-red-500/20"
                       >
                         Disconnect
+                      </button>
+                    )}
+                    {(s.transport === 'streamable-http' || s.transport === 'sse') && (
+                      <button
+                        onClick={() => handleRevokeOAuth(s.id)}
+                        title="Clear stored OAuth authorization for this server"
+                        className="ml-2 px-3 py-1 text-xs font-medium rounded-md border text-muted-foreground hover:bg-muted"
+                      >
+                        Revoke login
                       </button>
                     )}
                     <button

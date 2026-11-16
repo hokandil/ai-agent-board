@@ -297,6 +297,17 @@ export const api = {
   disconnectMcpServer: (id: string) =>
     request<MCPServer>(`/mcp/servers/${encodeURIComponent(id)}/disconnect`, { method: 'POST' }),
 
+  startMcpOAuth: (id: string) =>
+    request<{ status: 'none' | 'pending' | 'authorized' | 'error'; authorizationUrl?: string; error?: string }>(
+      `/mcp/servers/${encodeURIComponent(id)}/oauth/start`, { method: 'POST' }),
+
+  getMcpOAuthStatus: (id: string) =>
+    request<{ status: 'none' | 'pending' | 'authorized' | 'error'; error?: string; hasTokens: boolean }>(
+      `/mcp/servers/${encodeURIComponent(id)}/oauth/status`),
+
+  revokeMcpOAuth: (id: string) =>
+    request<{ revoked: boolean }>(`/mcp/servers/${encodeURIComponent(id)}/oauth/revoke`, { method: 'POST' }),
+
   deleteMcpServer: (id: string) =>
     request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 

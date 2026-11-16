@@ -623,6 +623,22 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
     return perm?.allowed ?? false;
   }
 
+  async getOAuthData(serverId: string): Promise<string | undefined> {
+    const row = this.db.prepare('SELECT data FROM mcp_oauth WHERE server_id = ?').get(serverId) as { data: string | null } | undefined;
+    return row?.data ?? undefined;
+  }
+
+  async setOAuthData(serverId: string, data: string): Promise<void> {
+    this.db.prepare(`
+      INSERT INTO mcp_oauth (server_id, data, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(server_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+    `).run(serverId, data, Date.now());
+  }
+
+  async deleteOAuthData(serverId: string): Promise<void> {
+    this.db.prepare('DELETE FROM mcp_oauth WHERE server_id = ?').run(serverId);
+  }
+
   // ─── MCP Sync repository ──────────────────────────────────────────────
 
   async getAllConnections(): Promise<SyncConnectionRecord[]> {

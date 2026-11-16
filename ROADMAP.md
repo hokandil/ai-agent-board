@@ -130,6 +130,11 @@ optional custom work). It fits **after** Stage 9 so current priorities are not d
   prompts/logs/UI events. Local `SKILL.md` skills discovered (`GET /api/skills`) and delivered
   to supporting agents (Copilot `skillDirectories`, Claude `skills`). Codex/OpenCode MCP
   injection not wired (documented provider limitation). See `docs/AGENT_INTERACTIVE_CONTROL.md`.
+- **MCP OAuth login: DONE.** Interactive browser Authorization Code + PKCE for HTTP/SSE MCP
+  servers (reuses MCP SDK `auth()`): discovery, dynamic registration, loopback callback with
+  state/PKCE validation, encrypted token storage, refresh, reconnect, revoke. Stele confirmed
+  to support standard MCP OAuth (Supabase AS); live login requires user approval. Deterministic
+  tests use a local OAuth provider. Manual-header auth preserved.
 
 Real-agent execution is exercised only by the opt-in live harness
 (`AGENTBOARD_LIVE_AGENT_TEST=1`, requires explicit authorization). The deterministic gate

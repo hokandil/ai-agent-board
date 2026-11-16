@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import type {
   MCPTool,
   MCPTransportType,
@@ -19,6 +20,8 @@ export interface MCPServerConfig {
   env?: Record<string, string>;
   cwd?: string;
   headers?: Record<string, string>;
+  /** Optional OAuth provider for interactive authorization + automatic token refresh. */
+  authProvider?: OAuthClientProvider;
 }
 
 /** Result of listing tools from an MCP server. */
@@ -106,6 +109,7 @@ export class MCPClientManager {
             new URL(config.url),
             {
               requestInit: config.headers ? { headers: config.headers } : undefined,
+              authProvider: config.authProvider,
             }
           );
           break;
@@ -118,6 +122,7 @@ export class MCPClientManager {
             new URL(config.url),
             {
               requestInit: config.headers ? { headers: config.headers } : undefined,
+              authProvider: config.authProvider,
             }
           );
           break;
