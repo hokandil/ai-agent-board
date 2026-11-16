@@ -7,7 +7,7 @@ import {
 import type {
   SyncConnection, SyncDirection, ConflictPolicy,
   SyncFieldMapping, SyncConflict, SyncResult,
-  MCPServer, MCPTool,
+  MCPServer, MCPTool, Task,
 } from '@/types';
 import { api } from '@/lib/api';
 
@@ -42,6 +42,22 @@ export function McpSyncConfig() {
   const [serverTools, setServerTools] = useState<MCPTool[]>([]);
   const [toolsLoading, setToolsLoading] = useState(false);
   const [toolChoice, setToolChoice] = useState('');
+  // Existing board tasks, so a sync connection can be created by picking a task
+  // instead of typing an internal task id. `taskIdManual` reveals an advanced
+  // free-text field for linking a task that isn't in the loaded list.
+  const [boardTasks, setBoardTasks] = useState<Task[]>([]);
+  const [taskId, setTaskId] = useState('');
+  const [taskIdManual, setTaskIdManual] = useState(false);
+
+  const loadBoardTasks = useCallback(async () => {
+    try {
+      const list = await api.getTasks();
+      setBoardTasks(list);
+    } catch {
+      // Non-fatal: fall back to manual task id entry.
+      setBoardTasks([]);
+    }
+  }, []);
 
   const loadServers = useCallback(async () => {
     try {
@@ -65,7 +81,8 @@ export function McpSyncConfig() {
   useEffect(() => {
     loadServers();
     loadConnections();
-  }, [loadServers, loadConnections]);
+    loadBoardTasks();
+  }, [loadServers, loadConnections, loadBoardTasks]);
 
   /** Task-like tools exposed by an MCP server, used to seed the sync tool picker. */
   const taskLikeTools = useMemo(() => {
@@ -94,6 +111,8 @@ export function McpSyncConfig() {
     setFormServerId('');
     setToolChoice('');
     setServerTools([]);
+    setTaskId('');
+    setTaskIdManual(false);
     setOpenForm(true);
   }, []);
 
@@ -101,9 +120,13 @@ export function McpSyncConfig() {
     setEditingConn(conn);
     setFormServerId(conn.serverId);
     setToolChoice(conn.externalTaskTool);
+    setTaskId(conn.taskId);
+    // If the linked task isn't in the loaded list (other project / archived), fall
+    // back to the advanced manual id field so the value is still visible & editable.
+    setTaskIdManual(!boardTasks.some((t) => t.id === conn.taskId));
     setOpenForm(true);
     await loadServerTools(conn.serverId);
-  }, [loadServerTools]);
+  }, [loadServerTools, boardTasks]);
 
   const loadConnectionDetail = useCallback(async (id: string) => {
     setMappingLoading(true);
@@ -567,23 +590,22 @@ export function McpSyncConfig() {
       {/* Add connection form */}
       <AnimatePresence>
         {openForm && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/40 backdrop-blur-sm"
-              onClick={() => setOpenForm(false)}
-            />
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+            onClick={() => setOpenForm(false)}
+          >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="relative w-full max-w-md rounded-lg border bg-background p-6 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog" aria-modal="true" aria-label={editingConn ? 'Edit Connection' : 'Add Sync Connection'}
+              className="flex max-h-[90vh] w-full max-w-lg flex-col rounded-xl border border-border bg-card p-0 text-card-foreground shadow-2xl"
             >
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between border-b border-border px-6 py-4 shrink-0">
                 <h3 className="font-semibold">{editingConn ? 'Edit Connection' : 'Add Sync Connection'}</h3>
-                <button onClick={() => setOpenForm(false)} className="text-muted-foreground hover:text-foreground">
+                <button onClick={() => setOpenForm(false)} aria-label="Close" className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors">
                   <X className="h-4 w-4" />
                 </button>
               </div>
@@ -609,8 +631,10 @@ export function McpSyncConfig() {
                     handleCreate(data);
                   }
                 }}
-                className="space-y-3"
-              >                <div>
+                className="flex flex-1 min-h-0 flex-col"
+              >
+                <div className="space-y-3 min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                <div>
                   <label className="block text-sm font-medium mb-1">MCP Server</label>
                   <select
                     name="serverId"
@@ -644,13 +668,58 @@ export function McpSyncConfig() {
                   )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Board Task ID</label>
-                  <input
-                    name="taskId"
-                    defaultValue={editingConn?.taskId ?? ''}
-                    className="w-full border rounded px-2 py-1 text-sm"
-                    required
-                  />
+                  <label className="block text-sm font-medium mb-1">Board Task</label>
+                  {!taskIdManual ? (
+                    <>
+                      <select
+                        name="taskId"
+                        value={taskId}
+                        onChange={(e) => setTaskId(e.target.value)}
+                        className="w-full border border-border rounded px-2 py-1 text-sm bg-background"
+                        required={!taskIdManual}
+                      >
+                        <option value="">Select a board task…</option>
+                        {boardTasks.map((t) => (
+                          <option key={t.id} value={t.id}>{t.title} — {t.id}</option>
+                        ))}
+                      </select>
+                      <div className="mt-1 flex items-center justify-between">
+                        <p className="text-xs text-muted-foreground">
+                          The board task this connection links to. Only tasks in the current project are listed.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => { setTaskIdManual(true); }}
+                          className="text-xs text-primary hover:underline shrink-0 ml-2"
+                        >
+                          Enter manually
+                        </button>
+                      </div>
+                      {boardTasks.length === 0 && (
+                        <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                          No board tasks found. Use “Enter manually” to link a task by its ID.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        name="taskId"
+                        value={taskId}
+                        onChange={(e) => setTaskId(e.target.value)}
+                        className="w-full border border-border rounded px-2 py-1 text-sm bg-background"
+                        placeholder="e.g. task-1699999999999-abc123"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => { setTaskIdManual(false); }}
+                        className="text-xs text-primary hover:underline mt-1"
+                      >
+                        Choose from list instead
+                      </button>
+                    </>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">External Source</label>
@@ -661,6 +730,10 @@ export function McpSyncConfig() {
                     placeholder="e.g. github, jira, linear"
                     required
                   />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    A label for the external system. The Board does not enumerate external tasks, so this
+                    and the key below are entered to identify the task in that system.
+                  </p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">External Key</label>
@@ -737,7 +810,8 @@ export function McpSyncConfig() {
                     ))}
                   </select>
                 </div>
-                <div className="flex items-center justify-between pt-3">
+                </div>
+                <div className="flex items-center justify-between gap-2 border-t border-border px-6 py-4 shrink-0">
                   <button
                     type="button"
                     onClick={() => setOpenForm(false)}
@@ -754,26 +828,25 @@ export function McpSyncConfig() {
                 </div>
               </form>
             </motion.div>
-          </>
+          </motion.div>
         )}
       </AnimatePresence>
 
       {/* Delete confirm */}
       <AnimatePresence>
         {deletingConn && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/40 backdrop-blur-sm"
-              onClick={() => setDeletingConn(null)}
-            />
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+            onClick={() => setDeletingConn(null)}
+          >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="relative w-full max-w-md rounded-lg border bg-background p-6 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog" aria-modal="true" aria-label="Delete Sync Connection"
+              className="w-full max-w-md rounded-xl border border-border bg-card p-6 text-card-foreground shadow-2xl"
             >
               <h3 className="font-semibold mb-2">Delete Sync Connection?</h3>
               <p className="text-sm text-muted-foreground mb-4">
@@ -795,7 +868,7 @@ export function McpSyncConfig() {
                 </button>
               </div>
             </motion.div>
-          </>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

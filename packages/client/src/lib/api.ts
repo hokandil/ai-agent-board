@@ -28,6 +28,8 @@ import type {
   SyncResult,
   AgentSession,
   AgentProfile,
+  SkillInfo,
+  AgentModelInfo,
 } from '@/types';
 
 export interface TaskGroupWithChildren extends TaskGroup {
@@ -339,6 +341,12 @@ export const api = {
     request<AgentProfile>(`/agent-profiles/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteAgentProfile: (id: string) =>
     request<void>(`/agent-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // --- Skills & model configuration ---
+  getSkills: () =>
+    request<SkillInfo[]>('/skills'),
+  getAgentModels: () =>
+    request<AgentModelInfo>('/agent-models'),
 
   updateMcpServer: (id: string, data: {
     name?: string;

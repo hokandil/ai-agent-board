@@ -46,6 +46,7 @@ import { isLoopbackAddress } from './network-policy.js';
 import { reconcileManagedWorktrees } from './services/worktree-cleanup.js';
 import { describeListenError, StartupProgress } from './startup.js';
 import { discoverSkills } from './services/skills.js';
+import { SUGGESTED_AGENT_MODELS } from './services/agent-model-catalog.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '8080', 10);
@@ -170,6 +171,19 @@ let auditLogger: AuditLogger;
   // GET /api/agents — list available agents
   app.get('/api/agents', (_req, res) => { res.json(agentManager.getAvailableAgents()); });
   app.post('/api/agents/refresh', async (_req, res, next) => { try { res.json(await agentManager.refresh()); } catch (err) { next(err); } });
+
+  // GET /api/agent-models — per-provider model configuration surfaced honestly.
+  // defaultModels: the real configured default each provider will use (from env / provider
+  //   instances); null when none is explicitly configured.
+  // suggestions: well-known model IDs offered only as convenience picks — availability is
+  //   determined by the provider/account and is NOT guaranteed. A custom model ID may always
+  //   be entered for providers that accept them.
+  app.get('/api/agent-models', (_req, res) => {
+    res.json({
+      defaultModels: agentManager.getProviderDefaultModels(),
+      suggestedModels: SUGGESTED_AGENT_MODELS,
+    });
+  });
 
   // GET /api/skills — discovered local SKILL.md skills (delivered to supporting agents).
   app.get('/api/skills', (_req, res) => { res.json(discoverSkills()); });

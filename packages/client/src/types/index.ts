@@ -8,6 +8,8 @@ export type {
   AgentType,
   AgentInfo,
   AgentProfile,
+  SkillInfo,
+  AgentModelInfo,
   Project,
   ProjectTaskCounts,
   ProjectConfig,

@@ -218,3 +218,15 @@ test('a task with no profile is unaffected by profile code path', async () => {
     assert.ok(!cfg.systemPrompt.includes('Agent profile instructions'), 'no profile section when no profile');
   } finally { db.close(); }
 });
+
+test('getProviderDefaultModels surfaces real configured models, not placeholders', () => {
+  const manager = new AgentManager();
+  // A provider with an explicit configured model is surfaced as-is.
+  (manager as any).providers.set('copilot', { name: 'copilot', displayName: 'Copilot', model: 'claude-opus-4' });
+  // A provider reporting the SDK placeholder 'configured default' is normalized to null
+  // so the UI never implies a model that is not actually set.
+  (manager as any).providers.set('claude', { name: 'claude', displayName: 'Claude', model: 'configured default' });
+  const models = manager.getProviderDefaultModels();
+  assert.equal(models.copilot, 'claude-opus-4');
+  assert.equal(models.claude, null);
+});

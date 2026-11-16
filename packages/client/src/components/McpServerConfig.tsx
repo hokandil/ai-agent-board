@@ -517,23 +517,22 @@ export function McpServerConfig(_props: {
       {/* Add/Edit server form */}
       <AnimatePresence>
         {openForm && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/40 backdrop-blur-sm"
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
               onClick={() => setOpenForm(false)}
-            />
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="relative w-full max-w-md rounded-lg border bg-background p-6 shadow-xl"
             >
-              <div className="flex items-center justify-between mb-4">
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                onClick={(e) => e.stopPropagation()}
+                role="dialog" aria-modal="true" aria-label={editingServer ? 'Edit Server' : 'Add MCP Server'}
+                className="flex max-h-[90vh] w-full max-w-md flex-col rounded-xl border border-border bg-card p-0 text-card-foreground shadow-2xl"
+              >
+              <div className="flex items-center justify-between border-b border-border px-6 py-4 shrink-0">
                 <h3 className="font-semibold">{editingServer ? 'Edit Server' : 'Add MCP Server'}</h3>
-                <button onClick={() => setOpenForm(false)} className="text-muted-foreground hover:text-foreground">
+                <button onClick={() => setOpenForm(false)} aria-label="Close" className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors">
                   <X className="h-4 w-4" />
                 </button>
               </div>
@@ -572,8 +571,9 @@ export function McpServerConfig(_props: {
                     handleCreate(data);
                   }
                 }}
-                className="space-y-3"
+                className="flex flex-1 min-h-0 flex-col"
               >
+                <div className="space-y-3 min-h-0 flex-1 overflow-y-auto px-6 py-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">Name</label>
                   <input
@@ -749,7 +749,8 @@ export function McpServerConfig(_props: {
                     </div>
                   </>
                 )}
-                <div className="flex items-center justify-between pt-3">
+                </div>
+                <div className="flex items-center justify-between gap-2 border-t border-border px-6 py-4 shrink-0">
                   <button
                     type="button"
                     onClick={() => setOpenForm(false)}
@@ -765,27 +766,26 @@ export function McpServerConfig(_props: {
                   </button>
                 </div>
               </form>
+              </motion.div>
             </motion.div>
-          </>
         )}
       </AnimatePresence>
 
       {/* Delete confirm */}
       <AnimatePresence>
         {deletingServer && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/40 backdrop-blur-sm"
-              onClick={() => setDeletingServer(null)}
-            />
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+            onClick={() => setDeletingServer(null)}
+          >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="relative w-full max-w-md rounded-lg border bg-background p-6 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog" aria-modal="true" aria-label="Delete MCP Server"
+              className="w-full max-w-md rounded-xl border border-border bg-card p-6 text-card-foreground shadow-2xl"
             >
               <h3 className="font-semibold mb-2">Delete MCP Server?</h3>
               <p className="text-sm text-muted-foreground mb-4">
@@ -806,7 +806,7 @@ export function McpServerConfig(_props: {
                 </button>
               </div>
             </motion.div>
-          </>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

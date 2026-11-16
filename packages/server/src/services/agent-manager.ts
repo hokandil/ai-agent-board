@@ -303,6 +303,22 @@ export class AgentManager {
     return [...this.availableAgents];
   }
 
+  /**
+   * The actual configured default model for each registered provider, read from
+   * the live provider instances (env-driven: COPILOT_MODEL / CLAUDE_MODEL / etc.).
+   * This surfaces the real runtime default without inventing a supported-model list.
+   * Providers that report no configured model (or 'configured default' placeholders)
+   * return null so the UI can avoid implying availability it cannot confirm.
+   */
+  getProviderDefaultModels(): Partial<Record<AgentType, string | null>> {
+    const out: Partial<Record<AgentType, string | null>> = {};
+    for (const [type, provider] of this.providers.entries()) {
+      const raw = (provider as { model?: string }).model;
+      out[type] = raw && raw !== 'configured default' ? raw : null;
+    }
+    return out;
+  }
+
   // ─── Session Management ──────────────────────────────────────────────
 
   /** Configure concurrency limits for sessions. */

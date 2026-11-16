@@ -70,6 +70,23 @@ export interface AgentProfile {
   updatedAt: number;
 }
 
+/** A discovered local skill (Agent Skills convention: <root>/<name>/SKILL.md).
+ *  Profile skillIds reference skills by this `name`. */
+export interface SkillInfo {
+  name: string;
+  description: string;
+  dir: string;
+  path: string;
+}
+
+/** Per-provider model configuration surfaced honestly to the UI. */
+export interface AgentModelInfo {
+  /** The actual configured default model per provider; null when none is set. */
+  defaultModels: Partial<Record<AgentType, string | null>>;
+  /** Convenience model IDs to suggest; availability is not guaranteed. */
+  suggestedModels: Record<AgentType, string[]>;
+}
+
 /** A first-class link between two durable Board work items. */
 export interface TaskRelationship {
   taskId: string;
