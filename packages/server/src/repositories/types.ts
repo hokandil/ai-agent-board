@@ -1,5 +1,5 @@
-import type { Task, AgentEvent, TaskRelationship, ExecutionAttempt } from '../types.js';
 import type { AgentProfile } from '@ai-agent-board/shared/types.js';
+import type { Task, AgentEvent, TaskRelationship, ExecutionAttempt, AgentType } from '../types.js';
 
 export interface OrchestrationAggregateResult {
   task: Task;
@@ -32,8 +32,11 @@ export interface TaskRepository {
   // Agent profile CRUD
   getAgentProfile(id: string): Promise<AgentProfile | undefined>;
   getAllAgentProfiles(): Promise<AgentProfile[]>;
+  /** The enabled saved configuration for a given execution provider, if any.
+   *  Used to resolve per-executor configuration from the single Agent selector. */
+  getAgentProfileByProvider(provider: AgentType): Promise<AgentProfile | undefined>;
   createAgentProfile(profile: Omit<AgentProfile, 'id' | 'createdAt' | 'updatedAt'>): Promise<AgentProfile>;
-  updateAgentProfile(id: string, updates: Partial<Pick<AgentProfile, 'name' | 'provider' | 'model' | 'instructions' | 'mcpServerIds' | 'skillIds' | 'enabled'>>): Promise<AgentProfile | undefined>;
+  updateAgentProfile(id: string, updates: Partial<Pick<AgentProfile, 'name' | 'provider' | 'model' | 'instructions' | 'command' | 'mcpServerIds' | 'skillIds' | 'enabled'>>): Promise<AgentProfile | undefined>;
   deleteAgentProfile(id: string): Promise<boolean>;
   insertEvent(event: AgentEvent): Promise<void>;
   getEventsByTaskId(taskId: string): Promise<AgentEvent[]>;

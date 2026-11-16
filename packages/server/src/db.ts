@@ -394,8 +394,8 @@ export function migrateSqliteDatabase(db: Database.Database): void {
     )
   `);
 
-  // Agent profiles: user-defined named agent configurations (provider, model,
-  // instructions/persona, MCP servers/skills selection, execution defaults).
+  // Agent profiles: per-executor configuration (provider, model, instructions/persona,
+  // executable command, MCP servers/skills selection, enabled).
   db.exec(`
     CREATE TABLE IF NOT EXISTS agent_profiles (
       id           TEXT PRIMARY KEY,
@@ -403,6 +403,7 @@ export function migrateSqliteDatabase(db: Database.Database): void {
       provider     TEXT NOT NULL CHECK (provider IN ('copilot', 'claude', 'codex', 'opencode', 'hermes', 'openclaw', 'grok')),
       model        TEXT,
       instructions TEXT,
+      command      TEXT,
       mcp_server_ids TEXT NOT NULL DEFAULT '[]',
       skill_ids    TEXT NOT NULL DEFAULT '[]',
       enabled      INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
@@ -411,6 +412,12 @@ export function migrateSqliteDatabase(db: Database.Database): void {
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_profiles_enabled ON agent_profiles(enabled)`);
+  // Additive migration for existing installs created before the command column existed.
+  {
+    const apCols = db.pragma('table_info(agent_profiles)') as { name: string }[];
+    const apNames = new Set(apCols.map((c) => c.name));
+    if (!apNames.has('command')) db.exec(`ALTER TABLE agent_profiles ADD COLUMN command TEXT`);
+  }
 
   // Migrate any plaintext MCP credentials to encrypted storage.
   // Rerunnable: only re-encrypts values that are not already in the encrypted envelope format.
@@ -694,6 +701,27 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
   await addProjectCol('default_use_worktree', 'BOOLEAN');
   await addProjectCol('repo_url', 'TEXT');
   await addProjectCol('aliases', "TEXT NOT NULL DEFAULT '[]'");
+
+  // Per-executor / per-profile configuration table. Declared before `tasks` because the
+  // tasks table references it (agent_profile_id FK). Idempotent and additive — safe for
+  // existing installs (CREATE TABLE IF NOT EXISTS) and required for fresh Postgres.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_profiles (
+      id             TEXT PRIMARY KEY,
+      name           TEXT NOT NULL,
+      provider       TEXT NOT NULL CHECK (provider IN ('copilot', 'claude', 'codex', 'opencode', 'hermes', 'openclaw', 'grok')),
+      model          TEXT,
+      instructions   TEXT,
+      command        TEXT,
+      mcp_server_ids TEXT NOT NULL DEFAULT '[]',
+      skill_ids      TEXT NOT NULL DEFAULT '[]',
+      enabled        BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at     BIGINT NOT NULL,
+      updated_at     BIGINT NOT NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_profiles_enabled ON agent_profiles(enabled)`);
+  await pool.query(`ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS command TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tasks (

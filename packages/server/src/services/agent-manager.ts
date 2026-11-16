@@ -279,6 +279,20 @@ export class AgentManager {
         }
       }
     }
+
+    // Apply persisted executor configuration for providers whose model/command is fixed at
+    // construction (opencode/hermes/openclaw/grok). Copilot/Claude/Codex deliver model per
+    // session, so they need no reconstruction. This makes a saved executable path or model
+    // survive a server restart; per-run changes are handled live by applyExecutorConfig().
+    if (this.eventRepo) {
+      const profiles = await this.eventRepo.getAllAgentProfiles();
+      for (const p of profiles) {
+        if (!p.enabled) continue;
+        if (p.provider === 'copilot' || p.provider === 'claude' || p.provider === 'codex') continue;
+        if (!p.command?.trim() && !p.model?.trim()) continue;
+        await this.applyExecutorConfig(p.provider, { command: p.command, model: p.model });
+      }
+    }
   }
 
   async refresh(): Promise<AgentInfo[]> {
@@ -301,6 +315,72 @@ export class AgentManager {
 
   getAvailableAgents(): AgentInfo[] {
     return [...this.availableAgents];
+  }
+
+  /**
+   * Apply a saved executor configuration to the live provider where the adapter genuinely
+   * supports it, so a value that is NOT delivered dynamically per-run (a custom executable
+   * path, or a model for providers whose SDK fixes model at construction) still takes effect.
+   *
+   * - Reconstructs the provider with the saved command and/or model and re-starts it.
+   * - Providers whose model is delivered per-session (copilot/claude/codex) need no
+   *   reconstruction here — `startSession` forwards `config.model` dynamically.
+   * - If starting the reconstructed provider fails, the previous provider is preserved so a
+   *   bad path never leaves the executor unregistered, and detection is updated with the reason.
+   *
+   * Returns true if the provider was re-registered or an attempt was made (capability-driven),
+   * false if this provider has nothing to apply here.
+   */
+  async applyExecutorConfig(
+    type: AgentType,
+    patch: { command?: string | null; model?: string | null },
+  ): Promise<{ applied: boolean; started: boolean; reason?: string }> {
+    const cmd = patch.command?.trim() || undefined;
+    const model = patch.model?.trim() || undefined;
+
+    // Model is delivered dynamically for these; nothing to reconstruct.
+    if (type === 'copilot' || type === 'claude' || type === 'codex') {
+      return { applied: false, started: true };
+    }
+
+    let provider: AgentProvider | null = null;
+    switch (type) {
+      case 'opencode':
+        provider = new OpenCodeProvider(model ? { model } : {});
+        break;
+      case 'hermes':
+        provider = new HermesProvider({
+          command: cmd ?? (process.env.HERMES_COMMAND?.trim() || 'hermes'),
+          ...(model ? { model } : {}),
+        });
+        break;
+      case 'openclaw':
+        provider = new OpenClawProvider({ ...(cmd ? { command: cmd } : {}), ...(model ? { model } : {}) });
+        break;
+      case 'grok':
+        provider = new GrokProvider({ ...(cmd ? { command: cmd } : {}), ...(model ? { model } : {}) });
+        break;
+      default:
+        return { applied: false, started: true };
+    }
+    if (!provider) return { applied: false, started: true };
+
+    const prev = this.providers.get(type);
+    try {
+      await withStartupTimeout(provider.start(), AGENT_START_TIMEOUT_MS, `agent provider "${type}" reconfigure start()`);
+    } catch (err: unknown) {
+      if (prev) this.providers.set(type, prev);
+      const reason = errorMessage(err);
+      const info = this.availableAgents.find((a) => a.name === type);
+      if (info) { info.available = false; info.reason = `Configuration could not start the provider: ${reason}`; }
+      return { applied: true, started: false, reason };
+    }
+    this.providers.set(type, provider);
+    // Re-detect this provider so availability/version reflect the new configuration.
+    const detected = await detectAvailableAgents();
+    const fresh = detected.find((a) => a.name === type);
+    this.availableAgents = this.availableAgents.map((a) => (a.name === type && fresh ? fresh : a));
+    return { applied: true, started: true };
   }
 
   /**
@@ -393,12 +473,22 @@ export class AgentManager {
     const task = entry.taskId ? await this.getTaskForSession(entry) : undefined;
     if (!task) throw new Error(`Session ${sessionId} has no assigned task`);
 
-    // Stage E: resolve the agent profile for this task. The task's snapshot
-    // (taken at creation) takes precedence so a running task keeps using its
-    // original configuration even if the profile is later edited.
+    // Resolve the execution configuration for this task.
+    //   1. An explicitly-attached profile (task.agentProfileId) wins, using its snapshot so a
+    //      running task keeps its original configuration even if the profile is later edited.
+    //   2. Otherwise the selected Agent (task.agentType / entry.agentType) determines the provider
+    //      and applies that executor's saved configuration (model, instructions, MCP, skills).
+    // The provider is NEVER taken from a source that contradicts the task's selected agent here:
+    // fallback lookup is keyed by the task's own agentType, so provider and config always agree.
     let profile: AgentProfile | undefined;
     if (task.agentProfileId && this.eventRepo) {
       profile = task.agentProfileSnapshot ?? (await this.eventRepo.getAgentProfile(task.agentProfileId));
+    }
+    if (!profile && this.eventRepo) {
+      profile = await this.eventRepo.getAgentProfileByProvider(entry.agentType);
+      // Capture the resolved executor config onto the task so a later edit to that
+      // executor's saved configuration does not change this task's subsequent runs.
+      if (profile) void this.eventRepo.update(task.id, { agentProfileId: profile.id, agentProfileSnapshot: profile }).catch(() => {});
     }
 
     // Check concurrency limits
@@ -413,6 +503,8 @@ export class AgentManager {
       void this.eventRepo?.update(task.id, { summary: null }).catch(() => {});
     }
 
+    // For the provider-keyed executor config path the profile's provider equals entry.agentType,
+    // so this cannot introduce a contradictory provider selection.
     const effectiveAgentType = profile?.provider ?? entry.agentType;
     // The profile's provider is the agent that actually executes; align the session entry so
     // provider selection, concurrency counters, hooks, and logs all use it consistently.

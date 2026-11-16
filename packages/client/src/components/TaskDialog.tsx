@@ -4,8 +4,8 @@ import {
   X,
   ChevronDown,
 } from 'lucide-react';
-import type { Task, TaskAttachment, ColumnId, AgentType, AgentInfo, Priority, AgentProfile } from '@/types';
-import { AGENT_OPTIONS, PROVIDER_OPTIONS } from '@/lib/agent-config';
+import type { Task, TaskAttachment, ColumnId, AgentType, AgentInfo, Priority } from '@/types';
+import { AGENT_OPTIONS } from '@/lib/agent-config';
 import { PRIORITY_OPTIONS } from '@/lib/priority-config';
 import { cn, getRepoPathHelpText, getRepoPathPlaceholder, isAbsoluteRepoPath, slugify } from '@/lib/utils';
 import { getRecentRepoPaths, addRepoPath } from '@/lib/repo-history';
@@ -36,11 +36,6 @@ interface TaskDialogProps {
 const agents = AGENT_OPTIONS;
 const priorities = PRIORITY_OPTIONS;
 
-const providerLabel = (provider: AgentType) => {
-  const found = PROVIDER_OPTIONS.find((p) => p.value === provider);
-  return found ? found.label : provider;
-};
-
 export function TaskDialog({ open, onClose, onSubmit, editTask, onEditSubmit, highlightRequired, lockedRepoPath, projectDefaults }: TaskDialogProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -59,8 +54,6 @@ export function TaskDialog({ open, onClose, onSubmit, editTask, onEditSubmit, hi
   const [pendingImages, setPendingImages] = useState<File[]>([]);
   const [existingAttachments, setExistingAttachments] = useState<TaskAttachment[]>([]);
   const [availableAgents, setAvailableAgents] = useState<AgentInfo[]>([]);
-  const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);
-  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
 
   const isEditMode = !!editTask;
   const hasLockedRepoPath = !!lockedRepoPath;
@@ -140,20 +133,6 @@ export function TaskDialog({ open, onClose, onSubmit, editTask, onEditSubmit, hi
       })
       .catch(() => {
         if (!cancelled) setAvailableAgents([]);
-      });
-
-    // Load profiles for selection
-    api.getAgentProfiles()
-      .then((result) => {
-        if (cancelled) return;
-        setAgentProfiles(result);
-        // If editing, pre-select the task's profile
-        if (editTask?.agentProfileId) {
-          setSelectedProfileId(editTask.agentProfileId);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setAgentProfiles([]);
       });
 
     return () => {
@@ -388,61 +367,6 @@ export function TaskDialog({ open, onClose, onSubmit, editTask, onEditSubmit, hi
                           {p.label}
                         </button>
                       ))}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-
-              {/* Agent Profile */}
-              <div className="relative" ref={agentRef}>
-                <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-                  Agent Profile
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setShowAgent(!showAgent)}
-                  className="flex w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-accent transition-colors"
-                >
-                  <span className="flex items-center gap-2">
-                    <span>{selectedProfileId ? agentProfiles.find((p) => p.id === selectedProfileId)?.name : 'Select profile'}</span>
-                  </span>
-                  <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', showAgent && 'rotate-180')} />
-                </button>
-
-                <AnimatePresence>
-                  {showAgent && (
-                    <motion.div
-                      initial={{ opacity: 0, y: -4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -4 }}
-                      className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-lg border border-border bg-popover shadow-lg"
-                    >
-                      {agentProfiles.length === 0 ? (
-                        <div className="px-3 py-2 text-xs text-muted-foreground">
-                          No profiles available. Create one in Agent Profiles.
-                        </div>
-                      ) : (
-                        agentProfiles.map((profile) => (
-                          <button
-                            key={profile.id}
-                            type="button"
-                            onClick={() => {
-                              setSelectedProfileId(profile.id);
-                              setShowAgent(false);
-                            }}
-                            className={cn(
-                              'flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors',
-                              selectedProfileId === profile.id && 'bg-accent'
-                            )}
-                          >
-                            <span className="flex-1 text-left">{profile.name}</span>
-                            <span className="text-[10px] text-muted-foreground">{providerLabel(profile.provider)}</span>
-                            {!profile.enabled && (
-                              <span className="text-[10px] text-red-500">Disabled</span>
-                            )}
-                          </button>
-                        ))
-                      )}
                     </motion.div>
                   )}
                 </AnimatePresence>

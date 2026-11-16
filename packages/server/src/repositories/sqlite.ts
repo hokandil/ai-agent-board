@@ -10,7 +10,7 @@ import type { AgentProfile } from '@ai-agent-board/shared/types.js';
 
 interface AgentProfileRow {
   id: string; name: string; provider: string; model: string | null;
-  instructions: string | null; mcp_server_ids: string | null;
+  instructions: string | null; command: string | null; mcp_server_ids: string | null;
   skill_ids: string | null; enabled: number;
   created_at: number; updated_at: number;
 }
@@ -46,7 +46,7 @@ interface TaskRow {
 
 interface AgentProfileRow {
   id: string; name: string; provider: string; model: string | null;
-  instructions: string | null; mcp_server_ids: string | null;
+  instructions: string | null; command: string | null; mcp_server_ids: string | null;
   skill_ids: string | null; enabled: number;
   created_at: number; updated_at: number;
 }
@@ -573,6 +573,7 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
     return {
       id: row.id, name: row.name, provider: row.provider as AgentProfile['provider'],
       model: row.model ?? undefined, instructions: row.instructions ?? undefined,
+      command: row.command ?? undefined,
       mcpServerIds: row.mcp_server_ids ? JSON.parse(row.mcp_server_ids) : [],
       skillIds: row.skill_ids ? JSON.parse(row.skill_ids) : [],
       enabled: Boolean(row.enabled),
@@ -585,6 +586,7 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
     return rows.map(row => ({
       id: row.id, name: row.name, provider: row.provider as AgentProfile['provider'],
       model: row.model ?? undefined, instructions: row.instructions ?? undefined,
+      command: row.command ?? undefined,
       mcpServerIds: row.mcp_server_ids ? JSON.parse(row.mcp_server_ids) : [],
       skillIds: row.skill_ids ? JSON.parse(row.skill_ids) : [],
       enabled: Boolean(row.enabled),
@@ -592,16 +594,33 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
     }));
   }
 
+  async getAgentProfileByProvider(provider: AgentType): Promise<AgentProfile | undefined> {
+    const row = this.db.prepare(
+      'SELECT * FROM agent_profiles WHERE provider = ? AND enabled = 1 ORDER BY updated_at DESC LIMIT 1',
+    ).get(provider) as AgentProfileRow | undefined;
+    if (!row) return undefined;
+    return {
+      id: row.id, name: row.name, provider: row.provider as AgentProfile['provider'],
+      model: row.model ?? undefined, instructions: row.instructions ?? undefined,
+      command: row.command ?? undefined,
+      mcpServerIds: row.mcp_server_ids ? JSON.parse(row.mcp_server_ids) : [],
+      skillIds: row.skill_ids ? JSON.parse(row.skill_ids) : [],
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
+  }
+
   async createAgentProfile(profile: Omit<AgentProfile, 'id' | 'createdAt' | 'updatedAt'>): Promise<AgentProfile> {
     const id = `agent-profile:${randomUUID()}`;
     const now = Date.now();
     const record: AgentProfile = { ...profile, id, createdAt: now, updatedAt: now };
     this.db.prepare(`
-      INSERT INTO agent_profiles (id,name,provider,model,instructions,mcp_server_ids,skill_ids,enabled,created_at,updated_at)
-      VALUES (@id,@name,@provider,@model,@instructions,@mcp_server_ids,@skill_ids,@enabled,@created_at,@updated_at)
+      INSERT INTO agent_profiles (id,name,provider,model,instructions,command,mcp_server_ids,skill_ids,enabled,created_at,updated_at)
+      VALUES (@id,@name,@provider,@model,@instructions,@command,@mcp_server_ids,@skill_ids,@enabled,@created_at,@updated_at)
     `).run({
       id: record.id, name: record.name, provider: record.provider,
       model: record.model ?? null, instructions: record.instructions ?? null,
+      command: record.command ?? null,
       mcp_server_ids: JSON.stringify(record.mcpServerIds), skill_ids: JSON.stringify(record.skillIds),
       enabled: record.enabled ? 1 : 0,
       created_at: record.createdAt, updated_at: record.updatedAt,
@@ -609,7 +628,7 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
     return record;
   }
 
-  async updateAgentProfile(id: string, updates: Partial<Pick<AgentProfile, 'name' | 'provider' | 'model' | 'instructions' | 'mcpServerIds' | 'skillIds' | 'enabled'>>): Promise<AgentProfile | undefined> {
+  async updateAgentProfile(id: string, updates: Partial<Pick<AgentProfile, 'name' | 'provider' | 'model' | 'instructions' | 'command' | 'mcpServerIds' | 'skillIds' | 'enabled'>>): Promise<AgentProfile | undefined> {
     const existing = await this.getAgentProfile(id);
     if (!existing) return undefined;
     const now = Date.now();
@@ -619,12 +638,14 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
     this.db.prepare(`
       UPDATE agent_profiles SET
         name = @name, provider = @provider, model = @model, instructions = @instructions,
+        command = @command,
         mcp_server_ids = @mcp_server_ids, skill_ids = @skill_ids, enabled = @enabled,
         updated_at = @updated_at
       WHERE id = @id
     `).run({
       id: merged.id, name: merged.name, provider: merged.provider,
       model: merged.model ?? null, instructions: merged.instructions ?? null,
+      command: merged.command ?? null,
       mcp_server_ids: JSON.stringify(merged.mcpServerIds), skill_ids: JSON.stringify(merged.skillIds),
       enabled: merged.enabled ? 1 : 0,
       updated_at: merged.updatedAt,

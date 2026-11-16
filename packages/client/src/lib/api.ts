@@ -30,6 +30,8 @@ import type {
   AgentProfile,
   SkillInfo,
   AgentModelInfo,
+  ManagedAgent,
+  AgentConfigInput,
 } from '@/types';
 
 export interface TaskGroupWithChildren extends TaskGroup {
@@ -347,6 +349,14 @@ export const api = {
     request<SkillInfo[]>('/skills'),
   getAgentModels: () =>
     request<AgentModelInfo>('/agent-models'),
+
+  // --- Agents management (per-executor configuration) ---
+  getManagedAgents: () =>
+    request<ManagedAgent[]>('/agents/manage'),
+  rescanAgents: () =>
+    request<ManagedAgent[]>('/agents/manage/rescan', { method: 'POST' }),
+  saveAgentConfig: (provider: AgentType, data: AgentConfigInput) =>
+    request<ManagedAgent>(`/agents/${encodeURIComponent(provider)}/config`, { method: 'PUT', body: JSON.stringify(data) }),
 
   updateMcpServer: (id: string, data: {
     name?: string;

@@ -230,3 +230,70 @@ test('getProviderDefaultModels surfaces real configured models, not placeholders
   assert.equal(models.copilot, 'claude-opus-4');
   assert.equal(models.claude, null);
 });
+
+test('executor saved config (by provider) reaches runtime when the task only selects an agent', async () => {
+  const { db, repo } = makeRepo();
+  try {
+    const manager = new AgentManager();
+    manager.initEventPersistence(repo);
+    const captured: { configs: any[] } = { configs: [] };
+    installProvider(manager, 'copilot', makeRecordingProvider('copilot', captured));
+
+    // Save an executor configuration for provider 'copilot' (one row per provider).
+    await repo.createAgentProfile({
+      name: 'copilot', provider: 'copilot', model: 'gpt-5.1-codex',
+      instructions: 'Follow the repo code style.', mcpServerIds: [], skillIds: [], enabled: true,
+    });
+
+    // A task with NO explicit profileId — only the agent selector (agentType='copilot').
+    const task = makeTask('task-executor-config', { agentType: 'copilot' });
+    await repo.create(task);
+
+    manager.startAgent(task, IGNORE_STATUS);
+    await waitFor(() => captured.configs.length > 0);
+
+    const cfg = captured.configs[0];
+    assert.equal(cfg.model, 'gpt-5.1-codex', 'executor saved model must reach createSession config');
+    assert.ok(cfg.systemPrompt.includes('Follow the repo code style.'), 'executor instructions must be injected');
+  } finally { db.close(); }
+});
+
+test('explicit task snapshot takes precedence over the provider saved config', async () => {
+  const { db, repo } = makeRepo();
+  try {
+    const manager = new AgentManager();
+    manager.initEventPersistence(repo);
+    const captured: { configs: any[] } = { configs: [] };
+    installProvider(manager, 'copilot', makeRecordingProvider('copilot', captured));
+
+    // Saved executor config says model A…
+    await repo.createAgentProfile({
+      name: 'copilot', provider: 'copilot', model: 'model-a',
+      instructions: null, mcpServerIds: [], skillIds: [], enabled: true,
+    });
+    // …but this task captured model B at creation (an earlier executor state).
+    const snapshot: AgentProfile = {
+      id: 'agent-profile:snap', name: 'copilot', provider: 'copilot', model: 'model-b',
+      instructions: null, mcpServerIds: [], skillIds: [], enabled: true, createdAt: 1, updatedAt: 1,
+    };
+    const task = makeTask('task-precedence', { agentType: 'copilot', agentProfileId: snapshot.id, agentProfileSnapshot: snapshot });
+    await repo.create(task);
+
+    manager.startAgent(task, IGNORE_STATUS);
+    await waitFor(() => captured.configs.length > 0);
+    assert.equal(captured.configs[0].model, 'model-b', 'snapshot wins over later saved config');
+  } finally { db.close(); }
+});
+
+test('getAgentProfileByProvider ignores disabled rows', async () => {
+  const { db, repo } = makeRepo();
+  try {
+    await repo.createAgentProfile({
+      name: 'codex', provider: 'codex', model: 'gpt-5-codex',
+      instructions: null, mcpServerIds: [], skillIds: [], enabled: false,
+    });
+    const found = await repo.getAgentProfileByProvider('codex');
+    assert.equal(found, undefined, 'disabled executor config is not selected for runtime');
+  } finally { db.close(); }
+});
+

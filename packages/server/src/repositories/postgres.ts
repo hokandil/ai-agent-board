@@ -40,7 +40,7 @@ interface TaskRow {
 
 interface AgentProfileRow {
   id: string; name: string; provider: string; model: string | null;
-  instructions: string | null; mcp_server_ids: string | null;
+  instructions: string | null; command: string | null; mcp_server_ids: string | null;
   skill_ids: string | null; enabled: number;
   created_at: number; updated_at: number;
 }
@@ -677,6 +677,7 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
     return {
       id: row.id, name: row.name, provider: row.provider as AgentProfile['provider'],
       model: row.model ?? undefined, instructions: row.instructions ?? undefined,
+      command: row.command ?? undefined,
       mcpServerIds: row.mcp_server_ids ? JSON.parse(row.mcp_server_ids) : [],
       skillIds: row.skill_ids ? JSON.parse(row.skill_ids) : [],
       enabled: Boolean(row.enabled),
@@ -689,6 +690,7 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
     return rows.map(row => ({
       id: row.id, name: row.name, provider: row.provider as AgentProfile['provider'],
       model: row.model ?? undefined, instructions: row.instructions ?? undefined,
+      command: row.command ?? undefined,
       mcpServerIds: row.mcp_server_ids ? JSON.parse(row.mcp_server_ids) : [],
       skillIds: row.skill_ids ? JSON.parse(row.skill_ids) : [],
       enabled: Boolean(row.enabled),
@@ -696,29 +698,49 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
     }));
   }
 
+  async getAgentProfileByProvider(provider: AgentType): Promise<AgentProfile | undefined> {
+    const { rows } = await this.pool.query<AgentProfileRow>(
+      'SELECT * FROM agent_profiles WHERE provider = $1 AND enabled = TRUE ORDER BY updated_at DESC LIMIT 1',
+      [provider],
+    );
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      id: row.id, name: row.name, provider: row.provider as AgentProfile['provider'],
+      model: row.model ?? undefined, instructions: row.instructions ?? undefined,
+      command: row.command ?? undefined,
+      mcpServerIds: row.mcp_server_ids ? JSON.parse(row.mcp_server_ids) : [],
+      skillIds: row.skill_ids ? JSON.parse(row.skill_ids) : [],
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
+  }
+
   async createAgentProfile(profile: Omit<AgentProfile, 'id' | 'createdAt' | 'updatedAt'>): Promise<AgentProfile> {
     const id = `agent-profile:${randomUUID()}`;
     const now = Date.now();
     const record: AgentProfile = { ...profile, id, createdAt: now, updatedAt: now };
     await this.pool.query(`
-      INSERT INTO agent_profiles (id,name,provider,model,instructions,mcp_server_ids,skill_ids,enabled,created_at,updated_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-    `, [record.id, record.name, record.provider, record.model ?? null, record.instructions ?? null,
+      INSERT INTO agent_profiles (id,name,provider,model,instructions,command,mcp_server_ids,skill_ids,enabled,created_at,updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    `, [record.id, record.name, record.provider, record.model ?? null, record.instructions ?? null, record.command ?? null,
       JSON.stringify(record.mcpServerIds), JSON.stringify(record.skillIds), record.enabled ? 1 : 0, record.createdAt, record.updatedAt]);
     return record;
   }
 
-  async updateAgentProfile(id: string, updates: Partial<Pick<AgentProfile, 'name' | 'provider' | 'model' | 'instructions' | 'mcpServerIds' | 'skillIds' | 'enabled'>>): Promise<AgentProfile | undefined> {
+  async updateAgentProfile(id: string, updates: Partial<Pick<AgentProfile, 'name' | 'provider' | 'model' | 'instructions' | 'command' | 'mcpServerIds' | 'skillIds' | 'enabled'>>): Promise<AgentProfile | undefined> {
     const existing = await this.getAgentProfile(id);
     if (!existing) return undefined;
     const now = Date.now();
-    const merged: AgentProfile = { ...existing, ...updates, updatedAt: now };
+    // Ignore undefined keys so PATCH-style updates only change supplied fields (matches SQLite).
+    const filtered = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined)) as typeof updates;
+    const merged: AgentProfile = { ...existing, ...filtered, updatedAt: now };
     await this.pool.query(`
       UPDATE agent_profiles SET
-        name = $1, provider = $2, model = $3, instructions = $4,
-        mcp_server_ids = $5, skill_ids = $6, enabled = $7, updated_at = $8
-      WHERE id = $9
-    `, [merged.name, merged.provider, merged.model ?? null, merged.instructions ?? null,
+        name = $1, provider = $2, model = $3, instructions = $4, command = $5,
+        mcp_server_ids = $6, skill_ids = $7, enabled = $8, updated_at = $9
+      WHERE id = $10
+    `, [merged.name, merged.provider, merged.model ?? null, merged.instructions ?? null, merged.command ?? null,
       JSON.stringify(merged.mcpServerIds), JSON.stringify(merged.skillIds), merged.enabled ? 1 : 0, merged.updatedAt, merged.id]);
     return merged;
   }

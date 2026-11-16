@@ -63,6 +63,8 @@ export interface AgentProfile {
   provider: AgentType;
   model?: string | null;
   instructions?: string | null;
+  /** Custom executable/command path for providers whose adapter accepts one (hermes/openclaw/grok). */
+  command?: string | null;
   mcpServerIds: string[];
   skillIds: string[];
   enabled: boolean;
@@ -85,6 +87,40 @@ export interface AgentModelInfo {
   defaultModels: Partial<Record<AgentType, string | null>>;
   /** Convenience model IDs to suggest; availability is not guaranteed. */
   suggestedModels: Record<AgentType, string[]>;
+}
+
+/** How a provider accepts model selection (mirrors the server capability matrix).
+ *  - 'session': the saved model is forwarded per run and takes effect now.
+ *  - 'startup': model is fixed at provider construction (server restart required).
+ *  - 'native': the provider reads its own model config; Board selection does not apply. */
+export type ModelDelivery = 'session' | 'startup' | 'native';
+
+/** Ground-truth per-provider capabilities that drive which controls the UI renders. */
+export interface ProviderCapabilities {
+  model: ModelDelivery;
+  commandConfigurable: boolean;
+  instructions: boolean;
+  mcp: boolean;
+  skills: boolean;
+  limitations: string[];
+}
+
+/** One executor for the Agents management screen: detection + supported config + saved config. */
+export interface ManagedAgent {
+  provider: AgentType;
+  detection: AgentInfo | null;
+  capabilities: ProviderCapabilities;
+  config: AgentProfile | null;
+}
+
+/** Input for saving an executor's configuration. */
+export interface AgentConfigInput {
+  model?: string | null;
+  instructions?: string | null;
+  command?: string | null;
+  mcpServerIds?: string[];
+  skillIds?: string[];
+  enabled?: boolean;
 }
 
 /** A first-class link between two durable Board work items. */

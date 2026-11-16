@@ -1,22 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Plus, X, Bot, Loader2, AlertCircle, RefreshCw, Zap, CheckCircle2, Circle } from 'lucide-react';
-import type { AgentProfile, AgentType, MCPServer, SkillInfo } from '@/types';
-import { AGENT_OPTIONS } from '@/lib/agent-config';
+import {
+  X, Bot, Loader2, AlertCircle, RefreshCw, CheckCircle2, Circle, Settings2, Terminal,
+} from 'lucide-react';
+import type { ManagedAgent, AgentType, MCPServer, SkillInfo } from '@/types';
+import { AGENT_DISPLAY } from '@/lib/agent-config';
 import { api } from '@/lib/api';
 
-// Providers are execution *backends* (installed coding-agent CLIs). A profile is a
-// reusable configuration built on top of one of them. The availability of each backend
-// is discovered at runtime (GET /api/agents) and shown separately from profiles.
-const PROVIDER_OPTIONS: { value: AgentType; label: string }[] = AGENT_OPTIONS.map((a) => ({
-  value: a.value,
-  label: a.label,
-}));
+const labelFor = (provider: AgentType) => AGENT_DISPLAY[provider]?.label ?? provider;
+const displayNameFor = (agent: ManagedAgent) => agent.detection?.displayName ?? labelFor(agent.provider);
 
-const providerLabel = (provider: AgentType) =>
-  PROVIDER_OPTIONS.find((p) => p.value === provider)?.label ?? provider;
-
-/** Shared centered, scrollable dialog shell used by all modals on this page. */
+/** Shared centered, scrollable dialog shell (themed, viewport-clamped). */
 function Modal({
   title, onClose, children, width = 'max-w-lg',
 }: { title: string; onClose: () => void; children: React.ReactNode; width?: string }) {
@@ -26,11 +20,9 @@ function Modal({
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" onClick={onClose}
       />
-      {/* Centering is done by a flex overlay, not translate utilities, so Framer's
-          transform animation never overrides them. */}
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
         <motion.div
-          role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}
+          role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={(e) => e.stopPropagation()}
           initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 20 }}
           transition={{ type: 'spring', damping: 25, stiffness: 300 }}
@@ -53,58 +45,69 @@ function Modal({
   );
 }
 
-type ProfileFormState = {
-  name: string;
-  provider: AgentType;
+/** Close a modal on Escape (keyboard dismissal). Attaches a one-time document listener. */
+function useEscapeClose(active: boolean, onClose: () => void) {
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [active, onClose]);
+}
+
+function DetectionBadge({ agent }: { agent: ManagedAgent }) {
+  const d = agent.detection;
+  if (!d) return <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">Unknown</span>;
+  if (d.available) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-600 dark:text-green-400">
+        <CheckCircle2 className="h-3.5 w-3.5" /> Available{d.version ? ` · v${d.version}` : ''}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground" title={d.reason}>
+      <Circle className="h-3.5 w-3.5" /> Unavailable
+    </span>
+  );
+}
+
+type FormState = {
   model: string;
   instructions: string;
+  command: string;
   mcpServerIds: string[];
   skillIds: string[];
   enabled: boolean;
 };
 
-const EMPTY_FORM: ProfileFormState = {
-  name: '', provider: 'copilot', model: '', instructions: '',
-  mcpServerIds: [], skillIds: [], enabled: true,
-};
-
 export function AgentsPage() {
-  const [profiles, setProfiles] = useState<AgentProfile[]>([]);
+  const [agents, setAgents] = useState<ManagedAgent[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [executors, setExecutors] = useState<Record<string, boolean>>({});
-  const [defaultModels, setDefaultModels] = useState<Record<string, string | null>>({});
-  const [suggestedModels, setSuggestedModels] = useState<Record<string, string[]>>({});
-
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [rescanning, setRescanning] = useState(false);
+
+  const [editing, setEditing] = useState<ManagedAgent | null>(null);
+  const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-
-  const [openForm, setOpenForm] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<ProfileFormState>(EMPTY_FORM);
-  const [deletingProfile, setDeletingProfile] = useState<AgentProfile | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
-      const [list, servers, skillList, agents, models] = await Promise.all([
-        api.getAgentProfiles(),
+      const [list, servers, skillList] = await Promise.all([
+        api.getManagedAgents(),
         api.getMcpServers().catch(() => [] as MCPServer[]),
         api.getSkills().catch(() => [] as SkillInfo[]),
-        api.getAgents().catch(() => [] as import('@/types').AgentInfo[]),
-        api.getAgentModels().catch(() => ({ defaultModels: {}, suggestedModels: {} })),
       ]);
-      setProfiles(list);
+      setAgents(list);
       setMcpServers(servers);
       setSkills(skillList);
-      setExecutors(Object.fromEntries(agents.map((a) => [a.name, a.available])));
-      setDefaultModels(models.defaultModels ?? {});
-      setSuggestedModels(models.suggestedModels ?? {});
     } catch (err: unknown) {
-      setLoadError(err instanceof Error ? err.message : 'Failed to load agent profiles');
+      setLoadError(err instanceof Error ? err.message : 'Failed to load agents');
     } finally {
       setLoading(false);
     }
@@ -112,63 +115,53 @@ export function AgentsPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const openCreate = () => {
-    setForm(EMPTY_FORM); setEditingId(null); setFormError(null); setOpenForm(true);
-  };
+  const handleRescan = useCallback(async () => {
+    setRescanning(true);
+    setLoadError(null);
+    try {
+      const list = await api.rescanAgents();
+      setAgents(list);
+    } catch (err: unknown) {
+      setLoadError(err instanceof Error ? err.message : 'Re-scan failed');
+    } finally {
+      setRescanning(false);
+    }
+  }, []);
 
-  const openEdit = (profile: AgentProfile) => {
+  const openConfig = (agent: ManagedAgent) => {
     setForm({
-      name: profile.name,
-      provider: profile.provider,
-      model: profile.model ?? '',
-      instructions: profile.instructions ?? '',
-      mcpServerIds: [...profile.mcpServerIds],
-      skillIds: [...profile.skillIds],
-      enabled: profile.enabled,
+      model: agent.config?.model ?? '',
+      instructions: agent.config?.instructions ?? '',
+      command: agent.config?.command ?? '',
+      mcpServerIds: [...(agent.config?.mcpServerIds ?? [])],
+      skillIds: [...(agent.config?.skillIds ?? [])],
+      enabled: agent.config?.enabled ?? true,
     });
-    setEditingId(profile.id);
     setFormError(null);
-    setOpenForm(true);
+    setEditing(agent);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!editing || !form) return;
     setFormError(null);
-    if (!form.name.trim()) { setFormError('A profile name is required.'); return; }
-    setSaving(true);
-    const payload = {
-      name: form.name.trim(),
-      provider: form.provider,
-      model: form.model.trim() || undefined,
-      instructions: form.instructions.trim() || undefined,
-      mcpServerIds: form.mcpServerIds,
-      skillIds: form.skillIds,
-      enabled: form.enabled,
-    };
-    try {
-      if (editingId) await api.updateAgentProfile(editingId, payload);
-      else await api.createAgentProfile(payload);
-      setOpenForm(false);
-      setEditingId(null);
-      await load();
-    } catch (err: unknown) {
-      // Keep the modal open and preserve typed input on a save/validation failure.
-      setFormError(err instanceof Error ? err.message : 'Failed to save profile');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!deletingProfile) return;
     setSaving(true);
     try {
-      await api.deleteAgentProfile(deletingProfile.id);
-      setDeletingProfile(null);
-      await load();
+      const updated = await api.saveAgentConfig(editing.provider, {
+        model: form.model.trim() || null,
+        instructions: form.instructions.trim() || null,
+        command: form.command.trim() || null,
+        mcpServerIds: form.mcpServerIds,
+        skillIds: form.skillIds,
+        enabled: form.enabled,
+      });
+      // Replace the edited row with the server's fresh view (detection may have changed).
+      setAgents((prev) => prev.map((a) => (a.provider === updated.provider ? updated : a)));
+      setEditing(null);
+      setForm(null);
     } catch (err: unknown) {
-      setLoadError(err instanceof Error ? err.message : 'Failed to delete profile');
-      setDeletingProfile(null);
+      // Keep the modal open and preserve typed input on failure.
+      setFormError(err instanceof Error ? err.message : 'Failed to save configuration');
     } finally {
       setSaving(false);
     }
@@ -177,79 +170,30 @@ export function AgentsPage() {
   const toggleInList = (list: string[], value: string): string[] =>
     list.includes(value) ? list.filter((x) => x !== value) : [...list, value];
 
-  const availableProviderCount = useMemo(
-    () => PROVIDER_OPTIONS.filter((p) => executors[p.value] !== false).length,
-    [executors],
-  );
+  useEscapeClose(!!editing, () => { setEditing(null); setForm(null); });
+
+  const availableCount = agents.filter((a) => a.detection?.available).length;
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 p-4 sm:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">Agent Profiles</h1>
-          <p className="text-sm text-muted-foreground">
-            Reusable agent configurations — provider, model, instructions, MCP servers and skills.
+          <h1 className="flex items-center gap-2 text-xl font-semibold"><Bot className="h-5 w-5" /> Agents</h1>
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            Configure the coding-agent executors installed on this machine. Each executor is a real CLI
+            (an adapter); selecting it for a task applies this saved configuration. There are no separate
+            “profiles” — one configuration per executor.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => void load()}
-            className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-            aria-label="Refresh"
-          >
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </button>
-          <button
-            onClick={openCreate}
-            className="flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-          >
-            <Plus className="h-4 w-4" /> New Profile
-          </button>
-        </div>
+        <button
+          onClick={() => void handleRescan()}
+          disabled={rescanning}
+          className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-60"
+        >
+          {rescanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          Re-scan executors
+        </button>
       </div>
-
-      {/* Executors vs Profiles: discovered CLIs vs user-defined configurations */}
-      <section className="rounded-lg border border-border bg-card p-4">
-        <div className="mb-2 flex items-center gap-2">
-          <Bot className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold">Discovered executors</h2>
-          <span className="text-xs text-muted-foreground">
-            Installed coding-agent CLIs available to run profiles ({availableProviderCount}/{PROVIDER_OPTIONS.length})
-          </span>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {PROVIDER_OPTIONS.map((p) => {
-            const available = executors[p.value];
-            const isKnown = available !== undefined;
-            return (
-              <span
-                key={p.value}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs"
-                title={
-                  !isKnown ? 'Availability not yet determined'
-                    : available ? 'Executor available' : 'CLI not detected — a profile using it cannot run'
-                }
-              >
-                {available === true ? (
-                  <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                ) : available === false ? (
-                  <Circle className="h-3.5 w-3.5 text-muted-foreground/50" />
-                ) : (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/50" />
-                )}
-                <span className="font-medium">{p.label}</span>
-                <span className="text-muted-foreground">
-                  {available === true ? 'available' : available === false ? 'unavailable' : 'unknown'}
-                </span>
-              </span>
-            );
-          })}
-        </div>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Executors are the execution backends. Profiles are reusable configurations built on them —
-          these are different concepts. An unavailable CLI cannot execute even if a profile selects it.
-        </p>
-      </section>
 
       {loadError && (
         <div className="flex items-center gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">
@@ -257,226 +201,177 @@ export function AgentsPage() {
         </div>
       )}
 
-      {/* Profiles list */}
-      <section className="rounded-lg border border-border bg-card">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="text-sm font-semibold">Profiles</h2>
+      {loading ? (
+        <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Detecting installed agents…
         </div>
-
-        {loading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading profiles…
-          </div>
-        ) : loadError && profiles.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            Profiles could not be loaded. Check the error above or press Refresh to retry.
-          </div>
-        ) : profiles.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 px-4 py-12 text-center">
-            <Zap className="h-8 w-8 text-muted-foreground/50" />
-            <div>
-              <p className="text-sm font-medium">No agent profiles yet</p>
-              <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                An Agent Profile bundles an execution provider, a model, custom instructions, and the
-                MCP servers and skills an agent may use. Create one, then assign it to a task to apply
-                these settings as defaults.
-              </p>
-            </div>
-            <button
-              onClick={openCreate}
-              className="mt-1 flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-            >
-              <Plus className="h-4 w-4" /> Create your first profile
-            </button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                  <th className="px-4 py-2 font-medium">Name</th>
-                  <th className="px-4 py-2 font-medium">Provider</th>
-                  <th className="px-4 py-2 font-medium">Model</th>
-                  <th className="px-4 py-2 font-medium">MCP servers</th>
-                  <th className="px-4 py-2 font-medium">Skills</th>
-                  <th className="px-4 py-2 text-center font-medium">Enabled</th>
-                  <th className="px-4 py-2 text-right font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {profiles.map((profile) => (
-                  <tr key={profile.id} className="border-b border-border/50 last:border-0">
-                    <td className="px-4 py-2 font-medium">{profile.name}</td>
-                    <td className="px-4 py-2">
-                      {providerLabel(profile.provider)}
-                      {executors[profile.provider] === false && (
-                        <span className="ml-1 text-xs text-amber-600 dark:text-amber-400">(CLI unavailable)</span>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">{availableCount} of {agents.length} executors available on this machine.</p>
+          {agents.map((agent) => {
+            const configured = !!agent.config;
+            return (
+              <div key={agent.provider} className="rounded-xl border border-border bg-card p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <Terminal className="h-5 w-5 text-muted-foreground" />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{displayNameFor(agent)}</span>
+                        <DetectionBadge agent={agent} />
+                        {configured && (
+                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">Configured</span>
+                        )}
+                        {agent.config && !agent.config.enabled && (
+                          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">Disabled</span>
+                        )}
+                      </div>
+                      {agent.detection && !agent.detection.available && agent.detection.reason && (
+                        <p className="mt-1 max-w-xl text-xs text-muted-foreground">{agent.detection.reason}</p>
                       )}
-                    </td>
-                    <td className="px-4 py-2">
-                      {profile.model || <span className="text-muted-foreground">provider default</span>}
-                    </td>
-                    <td className="px-4 py-2 text-xs">{profile.mcpServerIds.length || '—'}</td>
-                    <td className="px-4 py-2 text-xs">{profile.skillIds.length || '—'}</td>
-                    <td className="px-4 py-2 text-center">
-                      <span className={`rounded-full px-2 py-0.5 text-xs ${
-                        profile.enabled
-                          ? 'bg-green-500/15 text-green-600 dark:text-green-400'
-                          : 'bg-muted text-muted-foreground'
-                      }`}>
-                        {profile.enabled ? 'Enabled' : 'Disabled'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      <button onClick={() => openEdit(profile)} className="rounded-md px-2 py-1 text-xs text-primary hover:bg-accent">
-                        Edit
-                      </button>
-                      <button onClick={() => setDeletingProfile(profile)} className="rounded-md px-2 py-1 text-xs text-destructive hover:bg-accent">
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => openConfig(agent)}
+                    className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+                  >
+                    <Settings2 className="h-4 w-4" /> Configure
+                  </button>
+                </div>
 
-      <AnimatePresence>
-        {openForm && (
-          <Modal title={editingId ? 'Edit Agent Profile' : 'New Agent Profile'} onClose={() => setOpenForm(false)}>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label htmlFor="profile-name" className="mb-1.5 block text-xs font-medium text-muted-foreground">Name</label>
-                <input
-                  id="profile-name"
-                  value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                  placeholder="e.g. Backend Developer"
-                  autoFocus
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="profile-provider" className="mb-1.5 block text-xs font-medium text-muted-foreground">Provider</label>
-                <select
-                  id="profile-provider"
-                  value={form.provider}
-                  onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value as AgentType }))}
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  {PROVIDER_OPTIONS.map((p) => (
-                    <option key={p.value} value={p.value}>
-                      {p.label}{executors[p.value] === false ? ' (CLI unavailable)' : ''}
-                    </option>
-                  ))}
-                </select>
-                {executors[form.provider] === false && (
-                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                    This provider's CLI was not detected on the server. The profile can be saved but cannot
-                    execute until the CLI is installed.
-                  </p>
+                {agent.capabilities.limitations.length > 0 && (
+                  <ul className="mt-3 space-y-0.5 text-xs text-muted-foreground">
+                    {agent.capabilities.limitations.map((l) => (
+                      <li key={l}>• {l}</li>
+                    ))}
+                  </ul>
                 )}
               </div>
+            );
+          })}
+        </div>
+      )}
 
+      <AnimatePresence>
+        {editing && form && (
+          <Modal title={`Configure ${displayNameFor(editing)}`} onClose={() => { setEditing(null); setForm(null); }}>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {!editing.detection?.available && (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+                  This executor is not currently available{editing.detection?.reason ? `: ${editing.detection.reason}` : ''}.
+                  You can still save configuration, but tasks using it will report this diagnosis until it is installed/ready.
+                </div>
+              )}
+
+              {/* Model — capability-gated, honestly labeled. */}
               <div>
-                <label htmlFor="profile-model" className="mb-1.5 block text-xs font-medium text-muted-foreground">
-                  Model (optional)
-                </label>
+                <label htmlFor="agent-model" className="mb-1.5 block text-xs font-medium text-muted-foreground">Model</label>
                 <input
-                  id="profile-model"
-                  list="profile-model-options"
+                  id="agent-model"
                   value={form.model}
-                  onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                  placeholder={defaultModels[form.provider] || 'leave empty to use provider default'}
-                  aria-describedby="profile-model-help"
+                  onChange={(e) => setForm((f) => (f ? { ...f, model: e.target.value } : f))}
+                  disabled={editing.capabilities.model === 'native'}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
+                  placeholder={editing.capabilities.model === 'native' ? 'Not configurable — see note' : 'leave empty for provider default'}
                 />
-                <datalist id="profile-model-options">
-                  {(suggestedModels[form.provider] ?? []).map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-                <p id="profile-model-help" className="mt-1 text-xs text-muted-foreground">
-                  {defaultModels[form.provider]
-                    ? `Provider default: ${defaultModels[form.provider]}. Custom IDs are passed to the provider as-is — availability depends on the provider and account.`
-                    : 'Leave empty to use the provider’s own default. Custom IDs are passed as-is; availability depends on the provider and account.'}
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {editing.capabilities.model === 'session' && 'The saved model is applied to each run of this agent.'}
+                  {editing.capabilities.model === 'startup' && 'This provider fixes its model at startup; saving applies it on the next server restart.'}
+                  {editing.capabilities.model === 'native' && 'This provider reads its active model from its own configuration, so the Board cannot change it here.'}
                 </p>
               </div>
 
-              <div>
-                <label htmlFor="profile-instructions" className="mb-1.5 block text-xs font-medium text-muted-foreground">
-                  Instructions / persona (optional)
-                </label>
-                <textarea
-                  id="profile-instructions"
-                  value={form.instructions}
-                  onChange={(e) => setForm((f) => ({ ...f, instructions: e.target.value }))}
-                  rows={4}
-                  className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                  placeholder="System instructions for this agent…"
-                />
-              </div>
+              {/* Instructions / persona — supported for all. */}
+              {editing.capabilities.instructions && (
+                <div>
+                  <label htmlFor="agent-instructions" className="mb-1.5 block text-xs font-medium text-muted-foreground">
+                    Instructions / persona
+                  </label>
+                  <textarea
+                    id="agent-instructions"
+                    value={form.instructions}
+                    onChange={(e) => setForm((f) => (f ? { ...f, instructions: e.target.value } : f))}
+                    rows={4}
+                    className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    placeholder="System instructions applied to every run of this agent…"
+                  />
+                </div>
+              )}
 
-              <fieldset className="rounded-lg border border-border p-3">
-                <legend className="px-1 text-xs font-medium text-muted-foreground">MCP servers</legend>
-                {mcpServers.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No MCP servers configured. Add servers on the MCP Servers page.</p>
-                ) : (
-                  <div className="max-h-32 space-y-1 overflow-y-auto">
-                    {mcpServers.map((s) => (
-                      <label key={s.id} className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={form.mcpServerIds.includes(s.id)}
-                          onChange={() => setForm((f) => ({ ...f, mcpServerIds: toggleInList(f.mcpServerIds, s.id) }))}
-                        />
-                        <span>{s.name}</span>
-                        <span className="text-xs text-muted-foreground">({s.transport})</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </fieldset>
+              {/* Executable path — only where the adapter accepts a command. */}
+              {editing.capabilities.commandConfigurable && (
+                <div>
+                  <label htmlFor="agent-command" className="mb-1.5 block text-xs font-medium text-muted-foreground">
+                    Executable / command path
+                  </label>
+                  <input
+                    id="agent-command"
+                    value={form.command}
+                    onChange={(e) => setForm((f) => (f ? { ...f, command: e.target.value } : f))}
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    placeholder="Command or absolute path (leave empty for default)"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Lets you point this executor at an installed CLI that auto-detection missed. Saving applies to new sessions immediately.
+                  </p>
+                </div>
+              )}
 
-              <fieldset className="rounded-lg border border-border p-3">
-                <legend className="px-1 text-xs font-medium text-muted-foreground">Skills</legend>
-                {skills.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No skills discovered on the server.</p>
-                ) : (
-                  <div className="max-h-32 space-y-1 overflow-y-auto">
-                    {skills.map((sk) => (
-                      <label key={sk.name} className="flex items-center gap-2 text-sm" title={sk.description}>
-                        <input
-                          type="checkbox"
-                          checked={form.skillIds.includes(sk.name)}
-                          onChange={() => setForm((f) => ({ ...f, skillIds: toggleInList(f.skillIds, sk.name) }))}
-                        />
-                        <span>{sk.name}</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </fieldset>
+              {/* MCP servers — only where delivered. */}
+              {editing.capabilities.mcp && (
+                <fieldset className="rounded-lg border border-border p-3">
+                  <legend className="px-1 text-xs font-medium text-muted-foreground">MCP servers</legend>
+                  {mcpServers.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No MCP servers configured. Add some on the MCP Servers page.</p>
+                  ) : (
+                    <div className="max-h-32 space-y-1 overflow-y-auto">
+                      {mcpServers.map((s) => (
+                        <label key={s.id} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={form.mcpServerIds.includes(s.id)}
+                            onChange={() => setForm((f) => (f ? { ...f, mcpServerIds: toggleInList(f.mcpServerIds, s.id) } : f))}
+                          />
+                          <span>{s.name}</span>
+                          <span className="text-xs text-muted-foreground">({s.transport})</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </fieldset>
+              )}
+
+              {/* Skills — only where delivered. */}
+              {editing.capabilities.skills && (
+                <fieldset className="rounded-lg border border-border p-3">
+                  <legend className="px-1 text-xs font-medium text-muted-foreground">Skills</legend>
+                  {skills.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No skills discovered on the server.</p>
+                  ) : (
+                    <div className="max-h-32 space-y-1 overflow-y-auto">
+                      {skills.map((sk) => (
+                        <label key={sk.name} className="flex items-center gap-2 text-sm" title={sk.description}>
+                          <input
+                            type="checkbox"
+                            checked={form.skillIds.includes(sk.name)}
+                            onChange={() => setForm((f) => (f ? { ...f, skillIds: toggleInList(f.skillIds, sk.name) } : f))}
+                          />
+                          <span>{sk.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </fieldset>
+              )}
 
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
                   checked={form.enabled}
-                  onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))}
+                  onChange={(e) => setForm((f) => (f ? { ...f, enabled: e.target.checked } : f))}
                 />
-                <span>Enabled</span>
+                <span>Enabled (available for task execution)</span>
               </label>
-
-              <p className="text-xs text-muted-foreground">
-                These are profile <span className="font-medium">defaults</span>. When you assign this profile to a
-                task, its provider, model, instructions, MCP servers and skills are captured as a snapshot for that
-                task and applied at execution time. Editing this profile later does not change tasks that already
-                captured it — create or reassign to pick up new settings.
-              </p>
 
               {formError && (
                 <div className="flex items-center gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600 dark:text-red-400">
@@ -486,7 +381,7 @@ export function AgentsPage() {
 
               <div className="flex items-center justify-end gap-2 pt-1">
                 <button
-                  type="button" onClick={() => setOpenForm(false)}
+                  type="button" onClick={() => { setEditing(null); setForm(null); }}
                   className="rounded-md border border-border px-4 py-1.5 text-sm text-muted-foreground hover:bg-accent"
                 >
                   Cancel
@@ -496,36 +391,10 @@ export function AgentsPage() {
                   className="flex items-center gap-2 rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
                 >
                   {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                  {editingId ? 'Save changes' : 'Create profile'}
+                  Save configuration
                 </button>
               </div>
             </form>
-          </Modal>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {deletingProfile && (
-          <Modal title="Delete profile" onClose={() => setDeletingProfile(null)} width="max-w-sm">
-            <p className="text-sm">
-              Delete profile <span className="font-medium">{deletingProfile.name}</span>? This cannot be undone.
-              Tasks already assigned to it keep their existing snapshot.
-            </p>
-            <div className="mt-6 flex justify-end gap-2">
-              <button
-                onClick={() => setDeletingProfile(null)}
-                className="rounded-md border border-border px-4 py-1.5 text-sm text-muted-foreground hover:bg-accent"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => void handleDelete()}
-                disabled={saving}
-                className="rounded-md bg-destructive px-4 py-1.5 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-60"
-              >
-                {saving ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
           </Modal>
         )}
       </AnimatePresence>
