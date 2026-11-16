@@ -1,4 +1,5 @@
 import type { MCPRepository, MCPServerRecord } from '../repositories/mcp-types.js';
+import type { AgentProfile } from '@ai-agent-board/shared/types.js';
 
 /**
  * Stage D — MCP delivery.
@@ -138,5 +139,14 @@ export function buildMcpServersPayload(agentType: string, delivery: McpDeliveryS
 export async function buildMcpServersForAgent(repo: MCPRepository, agentType: string): Promise<unknown> {
   if (!(MCP_DELIVERY_PROVIDERS as readonly string[]).includes(agentType)) return undefined;
   const delivery = await collectAllowedMcpServers(repo, agentType);
+  return buildMcpServersPayload(agentType, delivery);
+}
+
+/** Build the MCP payload for a profile: only the profile's selected servers that
+ *  the agent is permitted to use. Returns undefined when nothing to deliver. */
+export async function buildMcpServersForProfile(repo: MCPRepository, agentType: string, profile: AgentProfile): Promise<unknown> {
+  if (!(MCP_DELIVERY_PROVIDERS as readonly string[]).includes(agentType)) return undefined;
+  const allowed = await collectAllowedMcpServers(repo, agentType);
+  const delivery = allowed.filter((d) => profile.mcpServerIds.includes(d.record.id));
   return buildMcpServersPayload(agentType, delivery);
 }

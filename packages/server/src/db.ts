@@ -64,7 +64,9 @@ export function migrateSqliteDatabase(db: Database.Database): void {
       created_at    INTEGER NOT NULL,
       started_at    INTEGER,
       completed_at  INTEGER,
-      summary       TEXT
+      summary       TEXT,
+      agent_profile_id      TEXT REFERENCES agent_profiles(id),
+      agent_profile_snapshot TEXT
     )
   `);
 
@@ -182,6 +184,8 @@ export function migrateSqliteDatabase(db: Database.Database): void {
   if (!colNames.has('run_claimed_at')) db.exec(`ALTER TABLE tasks ADD COLUMN run_claimed_at INTEGER`);
   if (!colNames.has('timeout_minutes')) db.exec(`ALTER TABLE tasks ADD COLUMN timeout_minutes INTEGER`);
   if (!colNames.has('agent_session_id')) db.exec(`ALTER TABLE tasks ADD COLUMN agent_session_id TEXT`);
+  if (!colNames.has('agent_profile_id')) db.exec(`ALTER TABLE tasks ADD COLUMN agent_profile_id TEXT REFERENCES agent_profiles(id)`);
+  if (!colNames.has('agent_profile_snapshot')) db.exec(`ALTER TABLE tasks ADD COLUMN agent_profile_snapshot TEXT`);
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_external_identity ON tasks(external_source, external_key) WHERE external_source IS NOT NULL AND external_key IS NOT NULL`);
 
   // Task groups table
@@ -372,6 +376,24 @@ export function migrateSqliteDatabase(db: Database.Database): void {
       updated_at INTEGER NOT NULL
     )
   `);
+
+  // Agent profiles: user-defined named agent configurations (provider, model,
+  // instructions/persona, MCP servers/skills selection, execution defaults).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_profiles (
+      id           TEXT PRIMARY KEY,
+      name         TEXT NOT NULL,
+      provider     TEXT NOT NULL CHECK (provider IN ('copilot', 'claude', 'codex', 'opencode', 'hermes', 'openclaw', 'grok')),
+      model        TEXT,
+      instructions TEXT,
+      mcp_server_ids TEXT NOT NULL DEFAULT '[]',
+      skill_ids    TEXT NOT NULL DEFAULT '[]',
+      enabled      INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+      created_at   BIGINT NOT NULL,
+      updated_at   BIGINT NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_profiles_enabled ON agent_profiles(enabled)`);
 
   // Migrate any plaintext MCP credentials to encrypted storage.
   // Rerunnable: only re-encrypts values that are not already in the encrypted envelope format.
@@ -671,7 +693,9 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
       agent_type    TEXT NOT NULL DEFAULT 'copilot',
       archived      BOOLEAN NOT NULL DEFAULT FALSE,
       project_id    TEXT NOT NULL DEFAULT 'default',
-      timeout_minutes INTEGER
+      timeout_minutes INTEGER,
+      agent_profile_id TEXT REFERENCES agent_profiles(id),
+      agent_profile_snapshot TEXT
     )
   `);
 
@@ -703,6 +727,8 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
   await addCol('run_claimed_at', 'BIGINT');
   await addCol('timeout_minutes', 'INTEGER');
   await addCol('agent_session_id', 'TEXT');
+  await addCol('agent_profile_id', 'TEXT');
+  await addCol('agent_profile_snapshot', 'TEXT');
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_external_identity ON tasks(external_source, external_key) WHERE external_source IS NOT NULL AND external_key IS NOT NULL`);
 
   // Task groups table

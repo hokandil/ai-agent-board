@@ -46,6 +46,28 @@ export interface Task {
   /** Provider-side session/conversation id from the last agent run, persisted so
    *  the session can be identified durably and resumed where the provider supports it. */
   agentSessionId?: string | null;
+  /** The agent profile this task was assigned to. */
+  agentProfileId?: string | null;
+  /** Snapshot of the resolved agent profile configuration at task creation time.
+   *  Stored so a task keeps using its original configuration even if the profile
+   *  is later edited. */
+  agentProfileSnapshot?: AgentProfile | null;
+}
+
+/** A user-defined agent profile: a reusable configuration referencing an
+ *  installed execution provider plus model, persona/instructions, MCP servers
+ *  and skills. */
+export interface AgentProfile {
+  id: string;
+  name: string;
+  provider: AgentType;
+  model?: string | null;
+  instructions?: string | null;
+  mcpServerIds: string[];
+  skillIds: string[];
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /** A first-class link between two durable Board work items. */

@@ -27,6 +27,7 @@ import type {
   SyncState,
   SyncResult,
   AgentSession,
+  AgentProfile,
 } from '@/types';
 
 export interface TaskGroupWithChildren extends TaskGroup {
@@ -310,6 +311,34 @@ export const api = {
 
   deleteMcpServer: (id: string) =>
     request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // --- Agent profiles ---
+  getAgentProfiles: () =>
+    request<AgentProfile[]>('/api/agent-profiles'),
+  getAgentProfile: (id: string) =>
+    request<AgentProfile>(`/api/agent-profiles/${encodeURIComponent(id)}`),
+  createAgentProfile: (data: {
+    name: string;
+    provider: AgentType;
+    model?: string;
+    instructions?: string;
+    mcpServerIds: string[];
+    skillIds: string[];
+    enabled: boolean;
+  }) =>
+    request<AgentProfile>('/api/agent-profiles', { method: 'POST', body: JSON.stringify(data) }),
+  updateAgentProfile: (id: string, data: {
+    name?: string;
+    provider?: AgentType;
+    model?: string;
+    instructions?: string;
+    mcpServerIds?: string[];
+    skillIds?: string[];
+    enabled?: boolean;
+  }) =>
+    request<AgentProfile>(`/api/agent-profiles/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteAgentProfile: (id: string) =>
+    request<void>(`/api/agent-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   updateMcpServer: (id: string, data: {
     name?: string;

@@ -1,4 +1,5 @@
 import type { Task, AgentEvent, TaskRelationship, ExecutionAttempt } from '../types.js';
+import type { AgentProfile } from '@ai-agent-board/shared/types.js';
 
 export interface OrchestrationAggregateResult {
   task: Task;
@@ -28,6 +29,12 @@ export interface TaskRepository {
   update(id: string, updates: Partial<Task>): Promise<Task | undefined>;
   delete(id: string): Promise<boolean>;
   count(): Promise<number>;
+  // Agent profile CRUD
+  getAgentProfile(id: string): Promise<AgentProfile | undefined>;
+  getAllAgentProfiles(): Promise<AgentProfile[]>;
+  createAgentProfile(profile: Omit<AgentProfile, 'id' | 'createdAt' | 'updatedAt'>): Promise<AgentProfile>;
+  updateAgentProfile(id: string, updates: Partial<Pick<AgentProfile, 'name' | 'provider' | 'model' | 'instructions' | 'mcpServerIds' | 'skillIds' | 'enabled'>>): Promise<AgentProfile | undefined>;
+  deleteAgentProfile(id: string): Promise<boolean>;
   insertEvent(event: AgentEvent): Promise<void>;
   getEventsByTaskId(taskId: string): Promise<AgentEvent[]>;
   deleteEventsByTaskId(taskId: string): Promise<void>;

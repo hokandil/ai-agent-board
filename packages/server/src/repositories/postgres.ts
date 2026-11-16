@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import { randomUUID } from 'node:crypto';
 import type { Task, Priority, ColumnId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt, MCPTool } from '../types.js';
 import type { TaskRepository, ContinuationEligibility } from './types.js';
 import type { MCPServerRecord, MCPToolRecord, MCPPermissionRecord, MCPRepository } from './mcp-types.js';
@@ -6,6 +7,7 @@ import type { SyncConnectionRecord, SyncFieldMapping, SyncConflict, SyncState, S
 import { isValidPriority, isValidColumnId, isValidAgentStatus, isValidAgentType } from '@ai-agent-board/shared/constants.js';
 import { errorMessage } from '../utils.js';
 import { credentialService } from '../services/credential-service.js';
+import type { AgentProfile } from '@ai-agent-board/shared/types.js';
 
 interface TaskRow {
   id: string;
@@ -32,6 +34,15 @@ interface TaskRow {
   run_requested_at: string | null; run_claimed_at: string | null;
   timeout_minutes: number | null;
   agent_session_id: string | null;
+  agent_profile_id: string | null;
+  agent_profile_snapshot: string | null;
+}
+
+interface AgentProfileRow {
+  id: string; name: string; provider: string; model: string | null;
+  instructions: string | null; mcp_server_ids: string | null;
+  skill_ids: string | null; enabled: number;
+  created_at: number; updated_at: number;
 }
 
 function rowToTask(row: TaskRow): Task {
@@ -81,6 +92,8 @@ function rowToTask(row: TaskRow): Task {
     runRequestedAt: row.run_requested_at != null ? Number(row.run_requested_at) : undefined, runClaimedAt: row.run_claimed_at != null ? Number(row.run_claimed_at) : undefined,
     timeoutMinutes: row.timeout_minutes ?? undefined,
     agentSessionId: row.agent_session_id ?? undefined,
+    agentProfileId: row.agent_profile_id ?? undefined,
+    agentProfileSnapshot: row.agent_profile_snapshot ? JSON.parse(row.agent_profile_snapshot) : undefined,
   };
 }
 
@@ -139,8 +152,8 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
     await this.pool.query(
       `INSERT INTO tasks (id, project_id, title, description, priority, column_id, agent_status, agent_type,
         created_at, started_at, completed_at, repo_path, branch_name, base_branch, use_worktree, worktree_path, archived,
-        group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)`,
+        group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id, agent_profile_id, agent_profile_snapshot)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)`,
       [
         task.id,
         task.projectId,
@@ -161,7 +174,7 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
         task.archived ?? false,
         task.groupId ?? null,
         task.groupOrder ?? null,
-        task.summary ?? null, task.externalSource ?? null, task.externalKey ?? null, task.provenance ? JSON.stringify(task.provenance) : null, task.runRequestedAt ?? null, task.runClaimedAt ?? null, task.timeoutMinutes ?? null, task.agentSessionId ?? null,
+        task.summary ?? null, task.externalSource ?? null, task.externalKey ?? null, task.provenance ? JSON.stringify(task.provenance) : null, task.runRequestedAt ?? null, task.runClaimedAt ?? null, task.timeoutMinutes ?? null, task.agentSessionId ?? null, task.agentProfileId ?? null, task.agentProfileSnapshot ? JSON.stringify(task.agentProfileSnapshot) : null,
       ]
     );
     return task;
@@ -197,8 +210,8 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
           agent_status = $5, agent_type = $6, started_at = $7, completed_at = $8,
           repo_path = $9, branch_name = $10, base_branch = $11, use_worktree = $12,
           worktree_path = $13, archived = $14, summary = $15, run_requested_at=$16, run_claimed_at=$17,
-          timeout_minutes=$18, agent_session_id=$19
-        WHERE id = $20`,
+          timeout_minutes=$18, agent_session_id=$19, agent_profile_id=$20, agent_profile_snapshot=$21
+        WHERE id = $22`,
         [
           merged.title,
           merged.description,
@@ -214,7 +227,7 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
           merged.useWorktree ?? null,
           merged.worktreePath ?? null,
           merged.archived ?? false,
-          merged.summary ?? null, merged.runRequestedAt ?? null, merged.runClaimedAt ?? null, merged.timeoutMinutes ?? null, merged.agentSessionId ?? null,
+          merged.summary ?? null, merged.runRequestedAt ?? null, merged.runClaimedAt ?? null, merged.timeoutMinutes ?? null, merged.agentSessionId ?? null, merged.agentProfileId ?? null, merged.agentProfileSnapshot ? JSON.stringify(merged.agentProfileSnapshot) : null,
           id,
         ]
       );
@@ -374,15 +387,15 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
       }
       const taskInsert = await client.query<TaskRow>(`INSERT INTO tasks (id,project_id,title,description,priority,column_id,agent_status,agent_type,
         created_at,started_at,completed_at,repo_path,branch_name,base_branch,use_worktree,worktree_path,archived,group_id,group_order,summary,
-        external_source,external_key,provenance,run_requested_at,run_claimed_at,timeout_minutes)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+        external_source,external_key,provenance,run_requested_at,run_claimed_at,timeout_minutes,agent_profile_id,agent_profile_snapshot)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
         ON CONFLICT(external_source,external_key)
           WHERE external_source IS NOT NULL AND external_key IS NOT NULL
         DO NOTHING RETURNING *`, [task.id,task.projectId,task.title,task.description,task.priority,task.columnId,
         task.agentStatus,task.agentType ?? 'copilot',task.createdAt,task.startedAt ?? null,task.completedAt ?? null,task.repoPath ?? null,
         task.branchName ?? null,task.baseBranch ?? null,task.useWorktree ?? null,task.worktreePath ?? null,task.archived ?? false,task.groupId ?? null,
         task.groupOrder ?? null,task.summary ?? null,task.externalSource ?? null,task.externalKey ?? null,task.provenance ? JSON.stringify(task.provenance) : null,
-        task.runRequestedAt ?? null,task.runClaimedAt ?? null,task.timeoutMinutes ?? null]);
+        task.runRequestedAt ?? null,task.runClaimedAt ?? null,task.timeoutMinutes ?? null,task.agentProfileId ?? null,task.agentProfileSnapshot ? JSON.stringify(task.agentProfileSnapshot) : null]);
       let persistedTask = taskInsert.rows[0] ? rowToTask(taskInsert.rows[0]) : undefined;
       if (!persistedTask) {
         const existingTask = await client.query<TaskRow>('SELECT * FROM tasks WHERE external_source=$1 AND external_key=$2 FOR UPDATE', [task.externalSource,task.externalKey]);
@@ -653,6 +666,66 @@ export class PostgresTaskRepository implements TaskRepository, MCPRepository, Sy
   async isToolAllowed(serverId: string, agentType: string, toolName: string): Promise<boolean> {
     const perm = await this.getPermission(serverId, agentType, toolName);
     return perm?.allowed ?? false;
+  }
+
+  // ─── Agent profile CRUD ──────────────────────────────────────────────
+
+  async getAgentProfile(id: string): Promise<AgentProfile | undefined> {
+    const { rows } = await this.pool.query<AgentProfileRow>('SELECT * FROM agent_profiles WHERE id = $1', [id]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      id: row.id, name: row.name, provider: row.provider as AgentProfile['provider'],
+      model: row.model ?? undefined, instructions: row.instructions ?? undefined,
+      mcpServerIds: row.mcp_server_ids ? JSON.parse(row.mcp_server_ids) : [],
+      skillIds: row.skill_ids ? JSON.parse(row.skill_ids) : [],
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
+  }
+
+  async getAllAgentProfiles(): Promise<AgentProfile[]> {
+    const { rows } = await this.pool.query<AgentProfileRow>('SELECT * FROM agent_profiles ORDER BY name ASC');
+    return rows.map(row => ({
+      id: row.id, name: row.name, provider: row.provider as AgentProfile['provider'],
+      model: row.model ?? undefined, instructions: row.instructions ?? undefined,
+      mcpServerIds: row.mcp_server_ids ? JSON.parse(row.mcp_server_ids) : [],
+      skillIds: row.skill_ids ? JSON.parse(row.skill_ids) : [],
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    }));
+  }
+
+  async createAgentProfile(profile: Omit<AgentProfile, 'id' | 'createdAt' | 'updatedAt'>): Promise<AgentProfile> {
+    const id = `agent-profile:${randomUUID()}`;
+    const now = Date.now();
+    const record: AgentProfile = { ...profile, id, createdAt: now, updatedAt: now };
+    await this.pool.query(`
+      INSERT INTO agent_profiles (id,name,provider,model,instructions,mcp_server_ids,skill_ids,enabled,created_at,updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    `, [record.id, record.name, record.provider, record.model ?? null, record.instructions ?? null,
+      JSON.stringify(record.mcpServerIds), JSON.stringify(record.skillIds), record.enabled ? 1 : 0, record.createdAt, record.updatedAt]);
+    return record;
+  }
+
+  async updateAgentProfile(id: string, updates: Partial<Pick<AgentProfile, 'name' | 'provider' | 'model' | 'instructions' | 'mcpServerIds' | 'skillIds' | 'enabled'>>): Promise<AgentProfile | undefined> {
+    const existing = await this.getAgentProfile(id);
+    if (!existing) return undefined;
+    const now = Date.now();
+    const merged: AgentProfile = { ...existing, ...updates, updatedAt: now };
+    await this.pool.query(`
+      UPDATE agent_profiles SET
+        name = $1, provider = $2, model = $3, instructions = $4,
+        mcp_server_ids = $5, skill_ids = $6, enabled = $7, updated_at = $8
+      WHERE id = $9
+    `, [merged.name, merged.provider, merged.model ?? null, merged.instructions ?? null,
+      JSON.stringify(merged.mcpServerIds), JSON.stringify(merged.skillIds), merged.enabled ? 1 : 0, merged.updatedAt, merged.id]);
+    return merged;
+  }
+
+  async deleteAgentProfile(id: string): Promise<boolean> {
+    const result = await this.pool.query('DELETE FROM agent_profiles WHERE id = $1', [id]);
+    return (result.rowCount ?? 0) > 0;
   }
 
   async getOAuthData(serverId: string): Promise<string | undefined> {

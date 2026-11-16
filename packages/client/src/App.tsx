@@ -26,6 +26,7 @@ import { ProjectsPage } from '@/components/ProjectsPage';
 import type { ProjectDialogInitialValues } from '@/components/ProjectDialog';
 import { McpServerConfig } from '@/components/McpServerConfig';
 import { McpSyncConfig } from '@/components/McpSyncConfig';
+import { AgentsPage } from '@/components/AgentsPage';
 import { SessionManager } from '@/components/SessionManager';
 import { PtyTerminal } from '@/components/PtyTerminal';
 
@@ -52,6 +53,7 @@ function BoardPage({
   onBackToProjects,
   onNavigateMcp,
   onNavigateMcpSync,
+  onNavigateAgents,
   initialTaskId,
 }: {
   project: Project;
@@ -60,6 +62,7 @@ function BoardPage({
   onBackToProjects: () => void;
   onNavigateMcp: () => void;
   onNavigateMcpSync: () => void;
+  onNavigateAgents: () => void;
   initialTaskId?: string;
 }) {
   const lockedRepoPath = project.repoPath;
@@ -424,6 +427,7 @@ function BoardPage({
         onNewGroup={handleOpenGroupDialog}
         onNavigateMcp={onNavigateMcp}
         onNavigateMcpSync={onNavigateMcpSync}
+        onNavigateAgents={onNavigateAgents}
       />
 
       <ConnectionBanner />
@@ -515,6 +519,7 @@ type RouteState =
   | { view: 'board'; projectId?: string; taskId?: string }
   | { view: 'mcp' }
   | { view: 'mcpSync' }
+  | { view: 'agents' }
   | { view: 'sessions' }
   | { view: 'pty'; sessionId: string };
 
@@ -552,6 +557,7 @@ function readRoute(): RouteState {
   const path = window.location.pathname.replace(/\/+$/, '') || '/';
   if (path === '/mcp') return { view: 'mcp' };
   if (path === '/mcp/sync') return { view: 'mcpSync' };
+  if (path === '/agents') return { view: 'agents' };
   if (path === '/sessions') return { view: 'sessions' };
   const ptyMatch = path.match(/^\/pty\/([^/]+)$/);
   if (ptyMatch) return { view: 'pty', sessionId: decodeURIComponent(ptyMatch[1]) };
@@ -567,7 +573,13 @@ function readRoute(): RouteState {
 }
 
 export function App() {
+  const navigate = useCallback((path: string) => {
+    window.history.pushState(null, '', path);
+    setRoute(readRoute());
+  }, []);
+
   const { theme, toggleTheme } = useTheme();
+
   const {
     projects,
     config,
@@ -581,12 +593,8 @@ export function App() {
     validateProjectPath,
     selectProjectDirectory,
   } = useProjects();
-  const [route, setRoute] = useState<RouteState>(() => readRoute());
 
-  const navigate = useCallback((path: string) => {
-    window.history.pushState(null, '', path);
-    setRoute(readRoute());
-  }, []);
+  const [route, setRoute] = useState<RouteState>(() => readRoute());
 
   useEffect(() => {
     const onPopState = () => setRoute(readRoute());
@@ -662,6 +670,10 @@ export function App() {
     );
   }
 
+  if (route.view === 'agents') {
+    return <AgentsPage />;
+  }
+
   return (
     <BoardPage
       project={selectedProject}
@@ -670,6 +682,7 @@ export function App() {
       onBackToProjects={() => navigate('/projects')}
       onNavigateMcp={() => navigate('/mcp')}
       onNavigateMcpSync={() => navigate('/mcp/sync')}
+      onNavigateAgents={() => navigate('/agents')}
       initialTaskId={route.view === 'board' ? route.taskId : undefined}
     />
   );

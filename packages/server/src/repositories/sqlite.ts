@@ -1,10 +1,19 @@
 import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import type { Task, Priority, ColumnId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt, MCPTool } from '../types.js';
 import type { TaskRepository, ContinuationEligibility } from './types.js';
 import type { MCPServerRecord, MCPToolRecord, MCPPermissionRecord, MCPRepository } from './mcp-types.js';
 import type { SyncConnectionRecord, SyncFieldMapping, SyncConflict, SyncState, SyncRepository } from './mcp-sync-types.js';
 import { errorMessage } from '../utils.js';
 import { credentialService } from '../services/credential-service.js';
+import type { AgentProfile } from '@ai-agent-board/shared/types.js';
+
+interface AgentProfileRow {
+  id: string; name: string; provider: string; model: string | null;
+  instructions: string | null; mcp_server_ids: string | null;
+  skill_ids: string | null; enabled: number;
+  created_at: number; updated_at: number;
+}
 
 interface TaskRow {
   id: string;
@@ -31,6 +40,15 @@ interface TaskRow {
   run_requested_at: number | null; run_claimed_at: number | null;
   timeout_minutes: number | null;
   agent_session_id: string | null;
+  agent_profile_id: string | null;
+  agent_profile_snapshot: string | null;
+}
+
+interface AgentProfileRow {
+  id: string; name: string; provider: string; model: string | null;
+  instructions: string | null; mcp_server_ids: string | null;
+  skill_ids: string | null; enabled: number;
+  created_at: number; updated_at: number;
 }
 
 function rowToTask(row: TaskRow): Task {
@@ -60,6 +78,8 @@ function rowToTask(row: TaskRow): Task {
     runRequestedAt: row.run_requested_at ?? undefined, runClaimedAt: row.run_claimed_at ?? undefined,
     timeoutMinutes: row.timeout_minutes ?? undefined,
     agentSessionId: row.agent_session_id ?? undefined,
+    agentProfileId: row.agent_profile_id ?? undefined,
+    agentProfileSnapshot: row.agent_profile_snapshot ? JSON.parse(row.agent_profile_snapshot) : undefined,
   };
 }
 
@@ -106,7 +126,7 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
         INSERT INTO tasks (id, project_id, title, description, priority, column_id, agent_status, agent_type, created_at, started_at, completed_at,
           repo_path, branch_name, base_branch, use_worktree, worktree_path, archived, group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, agent_session_id)
         VALUES (@id, @project_id, @title, @description, @priority, @column_id, @agent_status, @agent_type, @created_at, @started_at, @completed_at,
-          @repo_path, @branch_name, @base_branch, @use_worktree, @worktree_path, @archived, @group_id, @group_order, @summary, @external_source, @external_key, @provenance, @run_requested_at, @run_claimed_at, @timeout_minutes, @agent_session_id)
+          @repo_path, @branch_name, @base_branch, @use_worktree, @worktree_path, @archived, @group_id, @group_order, @summary, @external_source, @external_key, @provenance, @run_requested_at, @run_claimed_at, @timeout_minutes, @agent_session_id, @agent_profile_id, @agent_profile_snapshot)
       `),
       update: db.prepare(`
         UPDATE tasks SET
@@ -125,7 +145,8 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
           worktree_path = @worktree_path,
           archived = @archived,
           summary = @summary, run_requested_at = @run_requested_at, run_claimed_at = @run_claimed_at,
-          timeout_minutes = @timeout_minutes, agent_session_id = @agent_session_id
+          timeout_minutes = @timeout_minutes, agent_session_id = @agent_session_id,
+          agent_profile_id = @agent_profile_id, agent_profile_snapshot = @agent_profile_snapshot
         WHERE id = @id
       `),
       delete: db.prepare('DELETE FROM tasks WHERE id = ?'),
@@ -191,6 +212,8 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
       provenance: task.provenance ? JSON.stringify(task.provenance) : null, run_requested_at: task.runRequestedAt ?? null, run_claimed_at: task.runClaimedAt ?? null,
       timeout_minutes: task.timeoutMinutes ?? null,
       agent_session_id: task.agentSessionId ?? null,
+      agent_profile_id: task.agentProfileId ?? null,
+      agent_profile_snapshot: task.agentProfileSnapshot ? JSON.stringify(task.agentProfileSnapshot) : null,
     });
   }
 
@@ -236,6 +259,8 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
         summary: merged.summary ?? null, run_requested_at: merged.runRequestedAt ?? null, run_claimed_at: merged.runClaimedAt ?? null,
         timeout_minutes: merged.timeoutMinutes ?? null,
         agent_session_id: merged.agentSessionId ?? null,
+        agent_profile_id: merged.agentProfileId ?? null,
+        agent_profile_snapshot: merged.agentProfileSnapshot ? JSON.stringify(merged.agentProfileSnapshot) : null,
       });
       return merged;
   }
@@ -537,6 +562,76 @@ export class SqliteTaskRepository implements TaskRepository, MCPRepository, Sync
 
   async deleteServer(id: string): Promise<boolean> {
     const result = this.db.prepare('DELETE FROM mcp_servers WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  // ─── Agent profile CRUD ───────────────────────────────────────────────
+
+  async getAgentProfile(id: string): Promise<AgentProfile | undefined> {
+    const row = this.db.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id) as AgentProfileRow | undefined;
+    if (!row) return undefined;
+    return {
+      id: row.id, name: row.name, provider: row.provider as AgentProfile['provider'],
+      model: row.model ?? undefined, instructions: row.instructions ?? undefined,
+      mcpServerIds: row.mcp_server_ids ? JSON.parse(row.mcp_server_ids) : [],
+      skillIds: row.skill_ids ? JSON.parse(row.skill_ids) : [],
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
+  }
+
+  async getAllAgentProfiles(): Promise<AgentProfile[]> {
+    const rows = this.db.prepare('SELECT * FROM agent_profiles ORDER BY name ASC').all() as AgentProfileRow[];
+    return rows.map(row => ({
+      id: row.id, name: row.name, provider: row.provider as AgentProfile['provider'],
+      model: row.model ?? undefined, instructions: row.instructions ?? undefined,
+      mcpServerIds: row.mcp_server_ids ? JSON.parse(row.mcp_server_ids) : [],
+      skillIds: row.skill_ids ? JSON.parse(row.skill_ids) : [],
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    }));
+  }
+
+  async createAgentProfile(profile: Omit<AgentProfile, 'id' | 'createdAt' | 'updatedAt'>): Promise<AgentProfile> {
+    const id = `agent-profile:${randomUUID()}`;
+    const now = Date.now();
+    const record: AgentProfile = { ...profile, id, createdAt: now, updatedAt: now };
+    this.db.prepare(`
+      INSERT INTO agent_profiles (id,name,provider,model,instructions,mcp_server_ids,skill_ids,enabled,created_at,updated_at)
+      VALUES (@id,@name,@provider,@model,@instructions,@mcp_server_ids,@skill_ids,@enabled,@created_at,@updated_at)
+    `).run({
+      id: record.id, name: record.name, provider: record.provider,
+      model: record.model ?? null, instructions: record.instructions ?? null,
+      mcp_server_ids: JSON.stringify(record.mcpServerIds), skill_ids: JSON.stringify(record.skillIds),
+      enabled: record.enabled ? 1 : 0,
+      created_at: record.createdAt, updated_at: record.updatedAt,
+    });
+    return record;
+  }
+
+  async updateAgentProfile(id: string, updates: Partial<Pick<AgentProfile, 'name' | 'provider' | 'model' | 'instructions' | 'mcpServerIds' | 'skillIds' | 'enabled'>>): Promise<AgentProfile | undefined> {
+    const existing = await this.getAgentProfile(id);
+    if (!existing) return undefined;
+    const now = Date.now();
+    const merged: AgentProfile = { ...existing, ...updates, updatedAt: now };
+    this.db.prepare(`
+      UPDATE agent_profiles SET
+        name = @name, provider = @provider, model = @model, instructions = @instructions,
+        mcp_server_ids = @mcp_server_ids, skill_ids = @skill_ids, enabled = @enabled,
+        updated_at = @updated_at
+      WHERE id = @id
+    `).run({
+      id: merged.id, name: merged.name, provider: merged.provider,
+      model: merged.model ?? null, instructions: merged.instructions ?? null,
+      mcp_server_ids: JSON.stringify(merged.mcpServerIds), skill_ids: JSON.stringify(merged.skillIds),
+      enabled: merged.enabled ? 1 : 0,
+      updated_at: merged.updatedAt,
+    });
+    return merged;
+  }
+
+  async deleteAgentProfile(id: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM agent_profiles WHERE id = ?').run(id);
     return result.changes > 0;
   }
 

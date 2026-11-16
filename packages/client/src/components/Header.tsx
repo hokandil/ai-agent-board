@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, Kanban, Search, Archive, ArrowUpDown, Filter, Plus, X, Menu, Database, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Kanban, Search, Archive, ArrowUpDown, Filter, Plus, X, Menu, Database, RefreshCw, Sliders } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import { FilterChips, type StatusFilter } from './FilterChips';
 import { useConnectionStatus } from '@/hooks/useConnectionStatus';
@@ -29,6 +29,7 @@ interface HeaderProps {
   onNewGroup: () => void;
   onNavigateMcp: () => void;
   onNavigateMcpSync: () => void;
+  onNavigateAgents: () => void;
   title?: string;
   onBackToProjects?: () => void;
 }
@@ -40,7 +41,7 @@ const SORT_OPTIONS: { value: SortBy; label: string }[] = [
   { value: 'status', label: 'Status' },
 ];
 
-export function Header({ theme, toggleTheme, searchQuery, onSearchChange, showArchived, onToggleArchived, sortBy, sortDir, onSortByChange, onSortDirChange, activeAgentTypes, activeStatuses, onToggleAgentType, onToggleStatus, onClearFilters, onNewTask, onNewGroup, onNavigateMcp, onNavigateMcpSync, title = 'AI Agent Board', onBackToProjects }: HeaderProps) {
+export function Header({ theme, toggleTheme, searchQuery, onSearchChange, showArchived, onToggleArchived, sortBy, sortDir, onSortByChange, onSortDirChange, activeAgentTypes, activeStatuses, onToggleAgentType, onToggleStatus, onClearFilters, onNewTask, onNewGroup, onNavigateMcp, onNavigateMcpSync, onNavigateAgents, title = 'AI Agent Board', onBackToProjects }: HeaderProps) {
   const [showFilters, setShowFilters] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuSearchRef = useRef<HTMLInputElement>(null);
@@ -143,7 +144,15 @@ export function Header({ theme, toggleTheme, searchQuery, onSearchChange, showAr
               <RefreshCw className="h-3.5 w-3.5 shrink-0" />
               <span>Sync</span>
             </button>
-          </div>
+              <button
+                onClick={onNavigateAgents}
+                className="flex items-center gap-1.5 h-8 rounded-lg border border-zinc-600 text-zinc-300 text-xs font-medium hover:bg-zinc-700 transition-colors px-3"
+                aria-label="Agents"
+              >
+                <Sliders className="h-3.5 w-3.5 shrink-0" />
+                <span>Agents</span>
+              </button>
+            </div>
 
           {/* Divider */}
           <div className="hidden lg:block mx-2.5 h-5 w-px bg-zinc-700" />

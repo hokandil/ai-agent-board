@@ -22,9 +22,10 @@ import { gitExecFileSync } from '../routes/helpers.js';
 import { detectAvailableAgents } from './agent-detection.js';
 import { resolveTaskTimeoutMs } from './agent-timeout.js';
 import { withStartupTimeout } from '../startup.js';
-import { buildMcpServersForAgent } from './mcp-delivery.js';
+import { buildMcpServersForAgent, buildMcpServersForProfile } from './mcp-delivery.js';
 import { discoverSkills, getSkillsRoot } from './skills.js';
 import type { MCPRepository } from '../repositories/mcp-types.js';
+import type { AgentProfile } from '@ai-agent-board/shared/types.js';
 
 /** Max time to wait for a single agent provider's start() during boot. */
 const AGENT_START_TIMEOUT_MS = (() => {
@@ -376,6 +377,14 @@ export class AgentManager {
     const task = entry.taskId ? await this.getTaskForSession(entry) : undefined;
     if (!task) throw new Error(`Session ${sessionId} has no assigned task`);
 
+    // Stage E: resolve the agent profile for this task. The task's snapshot
+    // (taken at creation) takes precedence so a running task keeps using its
+    // original configuration even if the profile is later edited.
+    let profile: AgentProfile | undefined;
+    if (task.agentProfileId && this.eventRepo) {
+      profile = task.agentProfileSnapshot ?? (await this.eventRepo.getAgentProfile(task.agentProfileId));
+    }
+
     // Check concurrency limits
     this.enforceConcurrencyLimits(task.projectId);
 
@@ -569,10 +578,11 @@ export class AgentManager {
         const workingDirectory = worktreePath || task.repoPath || process.cwd();
         const hasGit = fs.existsSync(path.join(workingDirectory, '.git'));
         const safeTitle = task.title.replace(/[<>]/g, '');
+        const profileInstructions = profile?.instructions ? `\n## Agent profile instructions\n${profile.instructions}\n` : '';
         const systemPrompt = `
 <context>
 You are a coding agent working on a task in the project directory: ${workingDirectory}
-Task: ${safeTitle}
+Task: ${safeTitle}${profileInstructions}
 ${worktreePath ? `\nIMPORTANT: All file paths MUST be under ${worktreePath}. Do NOT reference or edit files at ${task.repoPath} directly.` : ''}
 ${!hasGit ? `\nIMPORTANT: This directory is not a git repository. Run \`git init\` first before making any changes, so all work is tracked.` : ''}
 Complete the task described in the user prompt. Be thorough — read relevant files,
@@ -597,18 +607,24 @@ Optional list of any work you did not complete or that should be followed up. Om
 
         // Stage D: deliver allowed MCP servers/tools to the provider via native injection.
         // Credentials go to the SDK config only — never to prompts, logs, or UI events.
-        const mcpServers = this.mcpRepo
-          ? await buildMcpServersForAgent(this.mcpRepo, entry.agentType)
-          : undefined;
+        // A task's profile selects its MCP servers/tools (default-deny); fall back to
+        // agent-type discovery when no profile selects them.
+        let mcpServers: unknown;
+        if (profile?.mcpServerIds?.length && this.mcpRepo) {
+          mcpServers = await buildMcpServersForProfile(this.mcpRepo!, entry.agentType, profile);
+        } else if (this.mcpRepo) {
+          mcpServers = await buildMcpServersForAgent(this.mcpRepo, entry.agentType);
+        }
 
-        // Stage D: deliver discovered local skills to providers that support them.
-        // Copilot loads SKILL.md from skillDirectories; Claude enables skills by name via
-        // its `skills` option (skills must live in a settings-discoverable location).
+        // Stage D: deliver local skills to providers that support them. A profile's
+        // skillIds take precedence over auto-discovery.
         const discoveredSkills = discoverSkills();
-        const skillDirectories = entry.agentType === 'copilot' && discoveredSkills.length > 0
+        const skillDirectories = entry.agentType === 'copilot' && (profile?.skillIds?.length ?? discoveredSkills.length) > 0
           ? [getSkillsRoot()] : undefined;
-        const claudeSkills = entry.agentType === 'claude' && discoveredSkills.length > 0
-          ? discoveredSkills.map((s) => s.name) : undefined;
+        const claudeSkills = entry.agentType === 'claude'
+          ? (profile?.skillIds?.length ? profile.skillIds : discoveredSkills.map((s) => s.name))
+          : [];
+        const claudeSkillsToUse = entry.agentType === 'claude' && claudeSkills.length > 0 ? claudeSkills : undefined;
 
         const coreSession = await provider.createSession({
           contextId: sessionId,
@@ -618,7 +634,7 @@ Optional list of any work you did not complete or that should be followed up. Om
           systemPrompt,
           ...(mcpServers !== undefined ? { mcpServers } : {}),
           ...(skillDirectories !== undefined ? { skillDirectories } : {}),
-          ...(claudeSkills !== undefined ? { skills: claudeSkills, settingSources: ['user', 'project', 'local'] } : {}),
+          ...(claudeSkillsToUse !== undefined ? { skills: claudeSkillsToUse, settingSources: ['user', 'project', 'local'] } : {}),
           // Stage C: interactive approval for ACP providers (Hermes/OpenClaw/Grok), Copilot,
           // Claude, and OpenCode. The provider's permission request is routed to the Board and
           // the user's explicit decision is awaited (never auto-approved). The async hook is
