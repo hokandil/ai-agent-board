@@ -44,6 +44,7 @@ import { startAgentForTask } from './routes/helpers.js';
 import { isLoopbackAddress } from './network-policy.js';
 import { reconcileManagedWorktrees } from './services/worktree-cleanup.js';
 import { describeListenError, StartupProgress } from './startup.js';
+import { discoverSkills } from './services/skills.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '8080', 10);
@@ -121,6 +122,8 @@ let auditLogger: AuditLogger;
 
   agentManager.initEventPersistence(taskRepo);
   agentManager.initAttachmentStore(attachmentStore);
+  // Both repository backends implement MCPRepository; enable MCP delivery to sessions.
+  agentManager.initMcpRepository(taskRepo as unknown as import('./repositories/mcp-types.js').MCPRepository);
 
   startup.begin('worktree-reconciliation');
   try {
@@ -165,6 +168,9 @@ let auditLogger: AuditLogger;
   // GET /api/agents — list available agents
   app.get('/api/agents', (_req, res) => { res.json(agentManager.getAvailableAgents()); });
   app.post('/api/agents/refresh', async (_req, res, next) => { try { res.json(await agentManager.refresh()); } catch (err) { next(err); } });
+
+  // GET /api/skills — discovered local SKILL.md skills (delivered to supporting agents).
+  app.get('/api/skills', (_req, res) => { res.json(discoverSkills()); });
 
   // Health check (no auth required). Reports startup readiness so a client can
   // distinguish "listening but still initializing" from "fully ready".

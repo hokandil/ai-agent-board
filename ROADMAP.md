@@ -115,14 +115,21 @@ optional custom work). It fits **after** Stage 9 so current priorities are not d
   (`Task.agentSessionId`), terminal-session retention, true provider resume via the SDK
   `resumeSessionId`, per-project concurrency counting fix, and client event recovery on
   WebSocket reconnect.
-- **Stage C — Interactive control: C1 + Claude DONE.** Bidirectional approval from the Board
+- **Stage C — Interactive control: DONE (C1/C2/C3).** Bidirectional approval from the Board
   (agent requests → Board displays → user responds without losing the session). Permission
   event + registry + response API + AgentPanel UI; wired for ACP (Hermes/OpenClaw/Grok),
-  Copilot (no auto-approve), and Claude (`canUseTool`, no auto-accept). **C2 remaining:**
-  OpenCode permission API (event-stream + respond endpoint; OpenCode not installed here, so
-  wiring is documented but unverified). **C3 pending:** Codex limitation surfaced +
-  expiry/cancellation hardening. See `docs/AGENT_INTERACTIVE_CONTROL.md`.
-- **Stage D — MCP & skills delivery: pending.**
+  Copilot (no auto-approve), Claude (`canUseTool`, no auto-accept), and OpenCode
+  (`permission.updated` → native respond endpoint). C3 hardening: configurable TTL expiry,
+  single-use settlement (no stale approvals), cancellation on stop/terminate/shutdown.
+  Codex limitation surfaced (config `approvalPolicy` only; not auto-approved). OpenCode wiring
+  follows the verified SDK contract but needs live verification (OpenCode not installed here).
+  See `docs/AGENT_INTERACTIVE_CONTROL.md`.
+- **Stage D — MCP & skills delivery: DONE.** Allowed MCP servers/tools are delivered to
+  assigned agents via native injection (Copilot/Claude/ACP), derived from `mcp_permissions`
+  (default-deny; Copilot per-tool allowlist). Credentials go to the SDK config only — never to
+  prompts/logs/UI events. Local `SKILL.md` skills discovered (`GET /api/skills`) and delivered
+  to supporting agents (Copilot `skillDirectories`, Claude `skills`). Codex/OpenCode MCP
+  injection not wired (documented provider limitation). See `docs/AGENT_INTERACTIVE_CONTROL.md`.
 
 Real-agent execution is exercised only by the opt-in live harness
 (`AGENTBOARD_LIVE_AGENT_TEST=1`, requires explicit authorization). The deterministic gate

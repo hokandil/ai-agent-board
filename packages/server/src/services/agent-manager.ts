@@ -22,6 +22,9 @@ import { gitExecFileSync } from '../routes/helpers.js';
 import { detectAvailableAgents } from './agent-detection.js';
 import { resolveTaskTimeoutMs } from './agent-timeout.js';
 import { withStartupTimeout } from '../startup.js';
+import { buildMcpServersForAgent } from './mcp-delivery.js';
+import { discoverSkills, getSkillsRoot } from './skills.js';
+import type { MCPRepository } from '../repositories/mcp-types.js';
 
 /** Max time to wait for a single agent provider's start() during boot. */
 const AGENT_START_TIMEOUT_MS = (() => {
@@ -178,6 +181,7 @@ export class AgentManager {
   private pendingPermissions = new Map<string, PendingPermission>();
   private eventLogs = new Map<string, AgentEvent[]>();
   private eventRepo: TaskRepository | null = null;
+  private mcpRepo: MCPRepository | null = null;
   private attachmentStore: AttachmentStore | null = null;
   private availableAgents: AgentInfo[] = [];
   /** Pending coalesced output/thinking broadcast per task */
@@ -195,6 +199,11 @@ export class AgentManager {
   /** Call once at startup to enable event persistence. */
   initEventPersistence(repo: TaskRepository): void {
     this.eventRepo = repo;
+  }
+
+  /** Provide the MCP repository so allowed MCP servers/tools can be delivered to sessions. */
+  initMcpRepository(repo: MCPRepository): void {
+    this.mcpRepo = repo;
   }
 
   initAttachmentStore(store: AttachmentStore): void {
@@ -586,18 +595,36 @@ Optional list of any work you did not complete or that should be followed up. Om
         let summaryBuffer = '';
         let resultBuffer = '';
 
+        // Stage D: deliver allowed MCP servers/tools to the provider via native injection.
+        // Credentials go to the SDK config only — never to prompts, logs, or UI events.
+        const mcpServers = this.mcpRepo
+          ? await buildMcpServersForAgent(this.mcpRepo, entry.agentType)
+          : undefined;
+
+        // Stage D: deliver discovered local skills to providers that support them.
+        // Copilot loads SKILL.md from skillDirectories; Claude enables skills by name via
+        // its `skills` option (skills must live in a settings-discoverable location).
+        const discoveredSkills = discoverSkills();
+        const skillDirectories = entry.agentType === 'copilot' && discoveredSkills.length > 0
+          ? [getSkillsRoot()] : undefined;
+        const claudeSkills = entry.agentType === 'claude' && discoveredSkills.length > 0
+          ? discoveredSkills.map((s) => s.name) : undefined;
+
         const coreSession = await provider.createSession({
           contextId: sessionId,
           workingDirectory,
           repoPath: task.repoPath,
           resumeSessionId: entry.resumeProviderSessionId,
           systemPrompt,
+          ...(mcpServers !== undefined ? { mcpServers } : {}),
+          ...(skillDirectories !== undefined ? { skillDirectories } : {}),
+          ...(claudeSkills !== undefined ? { skills: claudeSkills, settingSources: ['user', 'project', 'local'] } : {}),
           // Stage C: interactive approval for ACP providers (Hermes/OpenClaw/Grok), Copilot,
-          // and Claude. The provider's permission request is routed to the Board and the
-          // user's explicit decision is awaited (never auto-approved). The async hook is
-          // awaited by the patched providers. OpenCode wiring is Stage C2; Codex exposes
-          // only a config approval policy (limitation surfaced, not auto-approved).
-          hooks: (['hermes', 'openclaw', 'grok', 'copilot', 'claude'].includes(entry.agentType)
+          // Claude, and OpenCode. The provider's permission request is routed to the Board and
+          // the user's explicit decision is awaited (never auto-approved). The async hook is
+          // awaited by the patched providers. Codex exposes only a config approval policy
+          // (limitation surfaced, not auto-approved).
+          hooks: (['hermes', 'openclaw', 'grok', 'copilot', 'claude', 'opencode'].includes(entry.agentType)
             ? {
                 onPermissionRequest: (req: { kind: string; tool?: string }) =>
                   this.requestPermission(task.id, sessionId, req.kind, req.tool).then((decision) => ({
@@ -1053,7 +1080,9 @@ Optional list of any work you did not complete or that should be followed up. Om
   requestPermission(taskId: string, sessionId: string, kind: string, tool?: string): Promise<'approved' | 'denied' | 'expired' | 'cancelled'> {
     const requestId = `perm-${uuid()}`;
     return new Promise((resolve) => {
-      const timer = setTimeout(() => this.settlePermission(requestId, 'expired'), PERMISSION_REQUEST_TTL_MS);
+      const envTtl = Number(process.env.AGENTBOARD_PERMISSION_TTL_MS);
+      const ttl = Number.isFinite(envTtl) && envTtl > 0 ? envTtl : PERMISSION_REQUEST_TTL_MS;
+      const timer = setTimeout(() => this.settlePermission(requestId, 'expired'), ttl);
       this.pendingPermissions.set(requestId, { requestId, taskId, sessionId, kind, tool, createdAt: Date.now(), resolve, timer });
       this.emitEvent(taskId, {
         id: uuid(), taskId, type: 'permission_request',
@@ -1461,6 +1490,11 @@ Optional list of any work you did not complete or that should be followed up. Om
     this.sessions.clear();
     this.taskToSession.clear();
     this.sessionToTask.clear();
+
+    // Cancel any pending permission requests so no decision is left dangling on shutdown.
+    for (const requestId of [...this.pendingPermissions.keys()]) {
+      this.settlePermission(requestId, 'cancelled');
+    }
 
     for (const entry of entries) {
       if (entry.timeoutId) clearTimeout(entry.timeoutId);

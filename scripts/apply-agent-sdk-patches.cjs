@@ -60,6 +60,63 @@ const PATCHES = [
     replace: 'permissionMode,',
     with: "permissionMode: config.hooks?.onPermissionRequest ? 'default' : permissionMode, ...(config.hooks?.onPermissionRequest ? { canUseTool: async (toolName, input, opts) => { const d = await config.hooks.onPermissionRequest({ kind: toolName, tool: (opts && opts.title) || toolName }); return d.kind === 'approved' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'Permission denied by user' }; } } : {}),",
   },
+  {
+    // Stage D: forward per-session MCP servers to Copilot's native createSession/resumeSession.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/copilot.js',
+    replace: '...(hooks ? { hooks } : {}),',
+    with: '...(hooks ? { hooks } : {}), ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),',
+  },
+  {
+    // Stage D: forward per-session MCP servers to Claude's native query options.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/claude.js',
+    replace: '...(spawnFn ? { spawnClaudeCodeProcess: spawnFn } : {}),',
+    with: '...(spawnFn ? { spawnClaudeCodeProcess: spawnFn } : {}), ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),',
+  },
+  {
+    // Stage D: prefer per-session MCP servers over provider-level for Hermes (ACP session/new).
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/hermes.js',
+    replace: 'mcpServers: options?.mcpServers ?? [],',
+    with: 'mcpServers: config.mcpServers ?? options?.mcpServers ?? [],',
+  },
+  {
+    // Stage D: deliver per-session MCP servers for OpenClaw (ACP session/new).
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/openclaw.js',
+    replace: 'mcpServers: [],',
+    with: 'mcpServers: config.mcpServers ?? [],',
+  },
+  {
+    // Stage D: deliver per-session MCP servers for Grok (ACP session/new).
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/grok.js',
+    replace: 'mcpServers: [],',
+    with: 'mcpServers: config.mcpServers ?? [],',
+  },
+  {
+    // Stage C2: handle OpenCode permission.updated events interactively. Route the request to
+    // the Board hook and respond via the native permission endpoint (once/reject; no allow-all).
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/opencode.js',
+    replace: 'mapOpenCodeEvent(sessionId, event, config.contextId, config.onEvent);',
+    with: "if (event.type === 'permission.updated' && config.hooks?.onPermissionRequest) { const p = event.properties; (async () => { try { const d = await config.hooks.onPermissionRequest({ kind: p.type, tool: p.title }); await client.postSessionIdPermissionsPermissionId({ path: { id: sessionId, permissionID: p.id }, body: { response: d.kind === 'approved' ? 'once' : 'reject' } }); } catch {} })(); } else { mapOpenCodeEvent(sessionId, event, config.contextId, config.onEvent); }",
+  },
+  {
+    // Stage D: forward skill directories to Copilot's native session config.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/copilot.js',
+    replace: 'streaming: true,',
+    with: 'streaming: true, ...(config.skillDirectories ? { skillDirectories: config.skillDirectories } : {}),',
+  },
+  {
+    // Stage D: forward skills + settingSources to Claude's native query options.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/claude.js',
+    replace: 'cwd: config.workingDirectory,',
+    with: 'cwd: config.workingDirectory, ...(config.skills ? { skills: config.skills, settingSources: config.settingSources } : {}),',
+  },
 ];
 
 const repoRoot = path.resolve(__dirname, '..');
@@ -72,6 +129,12 @@ for (const patch of PATCHES) {
     continue;
   }
   let content = fs.readFileSync(target, 'utf8');
+  // Self-overlapping patches (the replacement still contains the anchor) would re-match
+  // on every run; treat the presence of the full replacement as already-applied.
+  if (patch.with.includes(patch.replace) && content.includes(patch.with)) {
+    console.log(`[patch] already applied: ${patch.package}#${patch.file}`);
+    continue;
+  }
   if (!content.includes(patch.replace)) {
     if (content.includes(patch.with)) {
       console.log(`[patch] already applied: ${patch.package}#${patch.file}`);

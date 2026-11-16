@@ -67,17 +67,45 @@ permission events; remove Copilot auto-approve), rather than forking the provide
 
 - **C1 — DONE:** permission model + registry + response API + AgentPanel UI; wired ACP
   (Hermes/OpenClaw/Grok) + Copilot (patched; Copilot auto-approve removed).
-- **C2 — Claude DONE; OpenCode pending.** Claude wired via native `canUseTool` (patched to use
+- **C2 — Claude + OpenCode DONE.** Claude wired via native `canUseTool` (patched to use
   `permissionMode:'default'` + `canUseTool` when the Board hook is present; no auto-accept).
-  OpenCode is natively capable (permission events + `postSessionIdPermissionsPermissionId`
-  respond endpoint) but uses an event-stream + separate respond call rather than the hook
-  return pattern; it needs an event-subscription patch that emits a `permission_request` and
-  responds via the SDK. OpenCode is not installed in this environment, so that wiring is
-  documented but not implemented/verified (avoid inventing the event flow).
-- **C3 — pending:** Codex limitation surfaced (config `approvalPolicy` only, no interactive
-  callback); expiration/cancellation hardening; further regression tests.
+  OpenCode wired per the verified `@opencode-ai/sdk` contract: the event loop handles
+  `permission.updated`, routes it to the Board hook, and responds via
+  `postSessionIdPermissionsPermissionId` (`once`/`reject`, no allow-all). OpenCode is not
+  installed here, so this wiring follows the verified contract but needs live verification.
+- **C3 — DONE.** Configurable permission TTL (`AGENTBOARD_PERMISSION_TTL_MS`), single-use
+  settlement (late/stale responses rejected), cancellation on stop/terminate/shutdown. Codex
+  limitation surfaced (config `approvalPolicy` only, no interactive callback; not auto-approved).
 
 Deterministic tests use fake providers that raise a permission request and assert the
 request→respond→resume flow, expiry, cross-task rejection, and no-auto-approve (ACP, Copilot,
-Claude covered). Real interactive approval is verified only via the opt-in live harness
+Claude, OpenCode covered). Real interactive approval is verified only via the opt-in live harness
 (explicit authorization).
+
+## Stage D — MCP & skills delivery (DONE)
+
+Goal: make the Board's existing MCP/skills configuration usable by assigned agents, not just
+visible in the UI. Reuses the native SDK/ACP injection points and the `mcp_permissions` store;
+no second MCP engine.
+
+**MCP delivery** (`services/mcp-delivery.ts`):
+- Default-deny: a server is delivered to an agent only if ≥1 of its tools is explicitly allowed
+  for that agent in `mcp_permissions`.
+- Native per-session injection via `provider.createSession({ mcpServers })` (patched wrappers
+  forward it): Copilot `Record<name,MCPServerConfig>` with a per-tool `tools` allowlist (real
+  tool-level enforcement); Claude `Record<name,McpServerConfig>` (server-level gating — Claude's
+  MCP config has no per-tool allowlist); ACP Hermes/OpenClaw/Grok `McpServer[]` (env/header pairs).
+- Credentials (env/headers) are passed to the SDK config only — never to prompts, logs, or UI
+  events (regression-tested).
+- Provider differences handled explicitly: Codex/OpenCode per-session MCP injection is not wired
+  (documented limitation), rather than pretending all agents are identical.
+
+**Skills** (`services/skills.ts`):
+- Discover local `SKILL.md` skills (`<skills-root>/<name>/SKILL.md`, YAML frontmatter). Root
+  defaults to `<AGENTBOARD_HOME>/skills`, override `AGENTBOARD_SKILLS_DIR`. Exposed at `GET /api/skills`.
+- Delivered to supporting agents: Copilot `skillDirectories`, Claude `skills` + `settingSources`.
+  Claude skills must live in a settings-discoverable location; other providers are unchanged.
+
+Deterministic tests: `mcp-delivery.test.ts` (default-deny, native formats, delivery into
+`createSession`, credentials not leaked to events) and `skills.test.ts` (discovery + delivery).
+Real MCP/skill usage by a live agent requires the opt-in live harness (explicit authorization).

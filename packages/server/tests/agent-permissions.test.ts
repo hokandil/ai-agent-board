@@ -230,3 +230,68 @@ test('Claude permission requests are interactive via the hook (no auto-accept)',
     assert.equal((await repo.getById(task.id))?.agentStatus, 'complete');
   } finally { db.close(); }
 });
+
+test('C3: permission request expires after TTL and a late response is rejected (no stale approval)', async () => {
+  const { db, repo } = makeRepo();
+  try {
+    const manager = new AgentManager();
+    manager.initEventPersistence(repo);
+    process.env.AGENTBOARD_PERMISSION_TTL_MS = '40';
+    const decision = manager.requestPermission('task-exp', 'sess-exp', 'shell');
+    assert.equal(await decision, 'expired', 'request must expire without a user decision');
+    assert.equal(manager.getPendingPermissions('task-exp').length, 0);
+    const events = await manager.getEvents('task-exp');
+    const req = events.find((e) => e.type === 'permission_request' && e.metadata?.permissionRequestId);
+    assert.ok(req, 'permission_request event emitted');
+    assert.equal(manager.respondToPermission('task-exp', req!.metadata!.permissionRequestId!, true), false,
+      'a response after expiry must be rejected (never reuse a stale approval)');
+  } finally { delete process.env.AGENTBOARD_PERMISSION_TTL_MS; db.close(); }
+});
+
+test('C3: shutdown cancels pending permission requests', async () => {
+  const { db, repo } = makeRepo();
+  try {
+    const manager = new AgentManager();
+    manager.initEventPersistence(repo);
+    const decision = manager.requestPermission('task-shut', 'sess-shut', 'shell');
+    assert.equal(manager.getPendingPermissions('task-shut').length, 1);
+    manager.shutdownAll();
+    assert.equal(await decision, 'cancelled', 'pending request must be cancelled on shutdown');
+    assert.equal(manager.getPendingPermissions('task-shut').length, 0);
+  } finally { db.close(); }
+});
+
+test('OpenCode permission requests are routed to the Board hook (no auto-approve)', async () => {
+  const { db, repo } = makeRepo();
+  try {
+    const manager = new AgentManager();
+    manager.initEventPersistence(repo);
+    const provider = {
+      name: 'opencode', displayName: 'Fake OpenCode', model: 'fake',
+      start: async () => {}, stop: async () => {},
+      createSession: async (config: any) => ({
+        sessionId: 'fake-oc-sess',
+        execute: async () => {
+          const decision = await config.hooks.onPermissionRequest({ kind: 'bash', tool: 'Run command' });
+          return decision.kind === 'approved' ? { status: 'complete' } : { status: 'failed', error: 'denied' };
+        },
+        send: async () => {}, abort: async () => {}, destroy: async () => {},
+      }),
+    };
+    (manager as any).providers.set('opencode', provider);
+    (manager as any).availableAgents = [{ name: 'opencode', displayName: 'Fake OpenCode', available: true }];
+
+    const task = { ...makeTask('perm-oc'), agentType: 'opencode' as const };
+    await repo.create(task);
+    const seen: string[] = [];
+    manager.startAgent(task, persister(repo, task.id, seen));
+    await waitFor(() => manager.getPendingPermissions(task.id).length > 0);
+    await new Promise((r) => setTimeout(r, 60));
+    assert.notEqual((await repo.getById(task.id))?.agentStatus, 'complete', 'OpenCode must not auto-approve');
+    const pending = manager.getPendingPermissions(task.id)[0];
+    manager.respondToPermission(task.id, pending.requestId, true);
+    await waitFor(() => seen.includes('complete'));
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal((await repo.getById(task.id))?.agentStatus, 'complete');
+  } finally { db.close(); }
+});
