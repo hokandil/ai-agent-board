@@ -397,34 +397,35 @@ export class AgentManager {
       void this.eventRepo?.update(task.id, { summary: null }).catch(() => {});
     }
 
-    const provider = this.providers.get(entry.agentType);
+    const effectiveAgentType = profile?.provider ?? entry.agentType;
+    const provider = this.providers.get(effectiveAgentType);
     if (!provider) {
       entry.status = 'failed';
       agentLog({
         level: 'error',
         component: 'agent-manager',
-        agentType: entry.agentType,
+        agentType: effectiveAgentType,
         sessionId,
         taskId: task.id,
         errorCategory: 'startup_failure',
-        message: `No provider registered for agent type: ${entry.agentType}`,
+        message: `No provider registered for agent type: ${effectiveAgentType}`,
       });
       this.emitEvent(task.id, {
         id: uuid(), taskId: task.id, type: 'error',
-        content: `No provider registered for agent type: ${entry.agentType}`,
+        content: `No provider registered for agent type: ${effectiveAgentType}`,
         timestamp: Date.now(),
-        metadata: { agentType: entry.agentType },
+        metadata: { agentType: effectiveAgentType },
       });
-      throw new Error(`No provider registered for agent type: ${entry.agentType}`);
+      throw new Error(`No provider registered for agent type: ${effectiveAgentType}`);
     }
 
-    const agentInfo = this.availableAgents.find(a => a.name === entry.agentType);
+    const agentInfo = this.availableAgents.find(a => a.name === effectiveAgentType);
     if (!agentInfo?.available) {
       entry.status = 'failed';
       agentLog({
         level: 'error',
         component: 'agent-manager',
-        agentType: entry.agentType,
+        agentType: effectiveAgentType,
         sessionId,
         taskId: task.id,
         errorCategory: 'startup_failure',
@@ -435,7 +436,7 @@ export class AgentManager {
         id: uuid(), taskId: task.id, type: 'error',
         content: `Agent ${provider.displayName} is not available: ${agentInfo?.reason || 'unknown reason'}`,
         timestamp: Date.now(),
-        metadata: { agentType: entry.agentType },
+        metadata: { agentType: effectiveAgentType },
       });
       throw new Error(`Agent ${provider.displayName} is not available`);
     }

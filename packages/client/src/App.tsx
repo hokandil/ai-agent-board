@@ -38,6 +38,7 @@ type TaskSubmitData = {
   priority: Priority;
   columnId: ColumnId;
   agentType: AgentType;
+  agentProfileId?: string;
   autoRun?: boolean;
   repoPath?: string;
   branchName?: string;

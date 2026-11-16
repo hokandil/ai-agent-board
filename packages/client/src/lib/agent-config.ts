@@ -15,6 +15,11 @@ export const AGENT_OPTIONS: { value: AgentType; label: string; emoji: string }[]
   Object.entries(AGENT_DISPLAY) as [AgentType, { emoji: string; label: string }][]
 ).map(([value, { emoji, label }]) => ({ value, label, emoji }));
 
+export const PROVIDER_OPTIONS: { value: AgentType; label: string }[] = AGENT_OPTIONS.map((a) => ({
+  value: a.value,
+  label: a.label,
+}));
+
 /** Safe lookup — returns undefined for unknown agent types */
 export function getAgentDisplay(agentType: string): { emoji: string; label: string } | undefined {
   return AGENT_DISPLAY[agentType as AgentType];
