@@ -7,7 +7,9 @@ import type { Task, TaskGroup, AgentEvent, AgentType, SessionStatus, AgentSessio
 import type { TaskRepository } from '../repositories/types.js';
 import type { AgentProvider, AgentSession as CoreAgentSession, AgentInfo, AgentAttachment } from '@codewithdan/agent-sdk-core';
 import type { AgentEvent as CoreAgentEvent } from '@codewithdan/agent-sdk-core';
-import { CopilotProvider, ClaudeProvider, CodexProvider, OpenCodeProvider, HermesProvider, OpenClawProvider, GrokProvider } from '@codewithdan/agent-sdk-core';
+import { CopilotProvider, ClaudeProvider, HermesProvider, OpenClawProvider, GrokProvider } from '@codewithdan/agent-sdk-core';
+import { CodexCliProvider } from './codex-cli-provider.js';
+import { OpenCodeCliProvider } from './opencode-cli-provider.js';
 import { broadcast } from '../websocket.js';
 import {
   cleanupTaskWorktree,
@@ -216,10 +218,8 @@ export class AgentManager {
     // Register all providers
     this.providers.set('copilot', new CopilotProvider());
     this.providers.set('claude', new ClaudeProvider());
-    this.providers.set('codex', new CodexProvider());
-    this.providers.set('opencode', new OpenCodeProvider(
-      process.env.OPENCODE_BASE_URL?.trim() ? { baseUrl: process.env.OPENCODE_BASE_URL.trim() } : {},
-    ));
+    this.providers.set('codex', new CodexCliProvider());
+    this.providers.set('opencode', new OpenCodeCliProvider());
     this.providers.set('hermes', new HermesProvider({
       command: process.env.HERMES_COMMAND?.trim() || 'hermes',
     }));
@@ -348,10 +348,7 @@ export class AgentManager {
     let provider: AgentProvider | null = null;
     switch (type) {
       case 'opencode':
-        provider = new OpenCodeProvider({
-          ...(process.env.OPENCODE_BASE_URL?.trim() ? { baseUrl: process.env.OPENCODE_BASE_URL.trim() } : {}),
-          ...(model ? { model } : {}),
-        });
+        provider = new OpenCodeCliProvider();
         break;
       case 'hermes':
         provider = new HermesProvider({
