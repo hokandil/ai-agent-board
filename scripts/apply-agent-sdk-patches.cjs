@@ -104,6 +104,15 @@ const PATCHES = [
     with: "if (event.type === 'permission.updated' && config.hooks?.onPermissionRequest) { const p = event.properties; (async () => { try { const d = await config.hooks.onPermissionRequest({ kind: p.type, tool: p.title }); await client.postSessionIdPermissionsPermissionId({ path: { id: sessionId, permissionID: p.id }, body: { response: d.kind === 'approved' ? 'once' : 'reject' } }); } catch {} })(); } else { mapOpenCodeEvent(sessionId, event, config.contextId, config.onEvent); }",
   },
   {
+    // Windows: npm installs OpenCode as a .cmd shim; Node cannot spawn .cmd directly
+    // without a shell. Enable shell only on Windows to resolve the shim while
+    // preserving direct spawn behavior on Linux/macOS.
+    package: '@codewithdan/agent-sdk-core',
+    file: 'dist/providers/opencode.js',
+    replace: 'detached: true,\n        shell: process.platform === \'win32\',\n        env: process.env,',
+    with: 'detached: process.platform !== \'win32\',\n        shell: process.platform === \'win32\',\n        env: process.env,',
+  },
+  {
     // Stage D: forward skill directories to Copilot's native session config.
     package: '@codewithdan/agent-sdk-core',
     file: 'dist/providers/copilot.js',
