@@ -26,6 +26,9 @@ import type {
   SyncConflict,
   SyncState,
   SyncResult,
+  McpImportPreviewResult,
+  McpImportSelection,
+  McpImportResult,
   AgentSession,
   AgentProfile,
   SkillInfo,
@@ -475,6 +478,29 @@ export const api = {
 
   getSyncState: (connectionId: string) =>
     request<SyncState>(`/mcp/sync/connections/${encodeURIComponent(connectionId)}/state`),
+
+  previewMcpImport: (data: {
+    serverId: string;
+    toolName: string;
+    arguments?: Record<string, unknown>;
+    externalSource?: string;
+  }) =>
+    request<McpImportPreviewResult>('/mcp/sync/import/preview', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  importMcpTasks: (data: {
+    serverId: string;
+    projectId: string;
+    toolName: string;
+    externalSource?: string;
+    tasks: McpImportSelection[];
+  }) =>
+    request<McpImportResult>('/mcp/sync/import', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // --- Session Management ---
   createSession: (data: {

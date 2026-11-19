@@ -8,6 +8,7 @@ import { migrateSqliteDatabase } from '../src/db.js';
 import { SqliteTaskRepository } from '../src/repositories/sqlite.js';
 import { createMcpRouter } from '../src/routes/mcp.js';
 import { createMcpSyncRouter } from '../src/routes/mcp-sync.js';
+import { SqliteProjectRepository } from '../src/repositories/sqlite-projects.js';
 import { requiredScope } from '../src/middleware/auth.js';
 
 function makeAgentManager() {
@@ -26,7 +27,7 @@ async function withMcpApi(run: (base: string, repo: SqliteTaskRepository) => Pro
     const app = express();
     app.use(express.json());
     app.use('/api/mcp', createMcpRouter(repo, makeAgentManager(), makeAuditLogger()));
-    app.use('/api/mcp/sync', createMcpSyncRouter(repo, makeAuditLogger()));
+    app.use('/api/mcp/sync', createMcpSyncRouter(repo, new SqliteProjectRepository(db), makeAuditLogger()));
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();

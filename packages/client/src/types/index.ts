@@ -1,4 +1,4 @@
-import type { AgentType } from '../../../../shared/types.js';
+import type { AgentType, Priority, ColumnId } from '../../../../shared/types.js';
 
 // Re-export all types and constants from the shared module
 export type {
@@ -150,6 +150,42 @@ export interface SyncResult {
   exported: number;
   conflicts: number;
   errors: Array<{ field: string; message: string }>;
+}
+
+/** A task discovered by an MCP listing tool, normalized for import preview. */
+export interface McpImportTask {
+  externalKey: string;
+  title: string;
+  description: string;
+  status?: string;
+  priority?: string;
+  columnId: ColumnId;
+  boardPriority: Priority;
+  alreadyImported: boolean;
+  existingTaskId?: string;
+}
+
+export interface McpImportPreviewResult {
+  toolName: string;
+  externalSource: string;
+  tasks: McpImportTask[];
+  limitation?: string;
+  recordLocation?: string;
+}
+
+export interface McpImportSelection {
+  externalKey: string;
+  title: string;
+  description?: string;
+  status?: string;
+  priority?: string;
+  columnId?: ColumnId;
+}
+
+export interface McpImportResult {
+  externalSource: string;
+  imported: Array<{ taskId: string; externalKey: string; connectionId: string }>;
+  skipped: Array<{ externalKey: string; reason: string; taskId?: string }>;
 }
 
 // ─── Agent Session types ─────────────────────────────────────────────────

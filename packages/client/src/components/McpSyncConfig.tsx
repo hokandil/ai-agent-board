@@ -10,6 +10,7 @@ import type {
   MCPServer, MCPTool, Task,
 } from '@/types';
 import { api } from '@/lib/api';
+import { McpTaskImportDialog } from './McpTaskImportDialog';
 
 type DirectionOption = { value: SyncDirection; label: string };
 type PolicyOption = { value: ConflictPolicy; label: string };
@@ -31,6 +32,7 @@ export function McpSyncConfig() {
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [openForm, setOpenForm] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editingConn, setEditingConn] = useState<SyncConnection | null>(null);
   const [deletingConn, setDeletingConn] = useState<string | null>(null);
   const [selectedConnId, setSelectedConnId] = useState<string | null>(null);
@@ -320,12 +322,21 @@ export function McpSyncConfig() {
             sync status changes, and resolve conflicts.
           </p>
         </div>
-        <button
-          onClick={openAddForm}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md border bg-primary text-primary-foreground hover:bg-primary/90"
-        >
-          <Plus className="h-4 w-4" /> Add Connection
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setImportOpen(true)}
+            data-testid="import-tasks-button"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md border text-muted-foreground hover:bg-muted"
+          >
+            <ArrowRight className="h-4 w-4" /> Import Tasks
+          </button>
+          <button
+            onClick={openAddForm}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md border bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            <Plus className="h-4 w-4" /> Add Connection
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -731,8 +742,8 @@ export function McpSyncConfig() {
                     required
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    A label for the external system. The Board does not enumerate external tasks, so this
-                    and the key below are entered to identify the task in that system.
+                    A label for the external system. Use “Import Tasks” to pull external tasks in
+                    automatically, or enter a source and key to link an existing board task.
                   </p>
                 </div>
                 <div>
@@ -871,6 +882,16 @@ export function McpSyncConfig() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <McpTaskImportDialog
+        open={importOpen}
+        servers={servers}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          void loadConnections();
+          void loadBoardTasks();
+        }}
+      />
     </div>
   );
 }
