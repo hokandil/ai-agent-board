@@ -281,6 +281,33 @@ async function normalizeWindowsCopilotAvailability(
   return agents.map(agent => agent.name === 'copilot' ? { ...agent, reason } : agent);
 }
 
+async function probeWindowsShellCommand(
+  command: string,
+  execCommand: ExecCommand,
+  env: NodeJS.ProcessEnv,
+): Promise<CommandProbeResult> {
+  return runProbe(execCommand, 'cmd.exe', ['/c', command, '--version'], env);
+}
+
+async function normalizeWindowsShellCommandAvailability(
+  agents: AgentInfo[],
+  agentName: string,
+  command: string,
+  execCommand: ExecCommand,
+  env: NodeJS.ProcessEnv,
+): Promise<AgentInfo[]> {
+  const agent = agents.find(a => a.name === agentName);
+  if (!agent || agent.available) return agents;
+
+  const result = await probeWindowsShellCommand(command, execCommand, env);
+  if (!result.ok) return agents;
+
+  const version = firstOutputLine(`${result.stdout}\n${result.stderr}`);
+  return agents.map(a => a.name === agentName
+    ? { ...a, available: true, version: version ?? a.version, reason: undefined }
+    : a);
+}
+
 export async function detectAvailableAgents(options: DetectAvailableAgentsOptions = {}): Promise<AgentInfo[]> {
   const agents = await (options.detectAgents ?? detectCoreAgents)();
   const platform = options.platform ?? process.platform;
@@ -291,6 +318,20 @@ export async function detectAvailableAgents(options: DetectAvailableAgentsOption
     return normalizeConfiguredHermesAvailability(agents, execCommand, env);
   }
 
-  const normalized = await normalizeWindowsCopilotAvailability(agents, execCommand, env);
+  let normalized = await normalizeWindowsCopilotAvailability(agents, execCommand, env);
+  normalized = await normalizeWindowsShellCommandAvailability(normalized, 'codex', 'codex', execCommand, env);
+  // Codex additionally requires persisted authentication.
+  const codex = normalized.find(a => a.name === 'codex');
+  if (codex?.available) {
+    const { existsSync } = await import('fs');
+    const { homedir } = await import('os');
+    const { join } = await import('path');
+    if (!existsSync(join(homedir(), '.codex', 'auth.json'))) {
+      normalized = normalized.map(a => a.name === 'codex'
+        ? { ...a, available: false, reason: 'Codex CLI installed but not logged in. Run: codex' }
+        : a);
+    }
+  }
+  normalized = await normalizeWindowsShellCommandAvailability(normalized, 'opencode', 'opencode', execCommand, env);
   return normalizeConfiguredHermesAvailability(normalized, execCommand, env);
 }

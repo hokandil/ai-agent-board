@@ -217,7 +217,9 @@ export class AgentManager {
     this.providers.set('copilot', new CopilotProvider());
     this.providers.set('claude', new ClaudeProvider());
     this.providers.set('codex', new CodexProvider());
-    this.providers.set('opencode', new OpenCodeProvider());
+    this.providers.set('opencode', new OpenCodeProvider(
+      process.env.OPENCODE_BASE_URL?.trim() ? { baseUrl: process.env.OPENCODE_BASE_URL.trim() } : {},
+    ));
     this.providers.set('hermes', new HermesProvider({
       command: process.env.HERMES_COMMAND?.trim() || 'hermes',
     }));
@@ -346,7 +348,10 @@ export class AgentManager {
     let provider: AgentProvider | null = null;
     switch (type) {
       case 'opencode':
-        provider = new OpenCodeProvider(model ? { model } : {});
+        provider = new OpenCodeProvider({
+          ...(process.env.OPENCODE_BASE_URL?.trim() ? { baseUrl: process.env.OPENCODE_BASE_URL.trim() } : {}),
+          ...(model ? { model } : {}),
+        });
         break;
       case 'hermes':
         provider = new HermesProvider({
