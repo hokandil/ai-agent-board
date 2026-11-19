@@ -7,6 +7,7 @@ const TEST_CLIENT_PORT = Number(process.env.E2E_CLIENT_PORT ?? 4176);
 
 export default defineConfig({
   testDir: './tests',
+  testIgnore: /.*\.real\.spec\.ts/,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

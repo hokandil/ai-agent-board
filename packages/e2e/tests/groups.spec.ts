@@ -357,6 +357,44 @@ test.describe('Task Groups API', () => {
     }
   });
 
+  test('group run executes the queue and settles queued children when no agent is available', async ({ request }) => {
+    // Required gate runs with AGENTBOARD_DISABLE_AGENT_STARTUP=1, so no executor can
+    // complete. This still exercises the real group queue: the group moves to
+    // in-progress, every child leaves idle, and each failure is recorded as a
+    // structured error event instead of leaving the group hanging.
+    const createRes = await request.post(`${API}/api/groups`, {
+      data: {
+        title: 'Deterministic Execution Group',
+        maxConcurrency: 1,
+        children: makeChildren(2),
+      },
+    });
+    expect(createRes.status()).toBe(201);
+    const group = await createRes.json();
+    createdGroupIds.push(group.id);
+
+    const runRes = await request.post(`${API}/api/groups/${group.id}/run`);
+    expect(runRes.status()).toBe(200);
+    const started = await runRes.json();
+    expect(started.columnId).toBe('in-progress');
+    expect(started.startedAt).toBeTruthy();
+
+    await expect(async () => {
+      const res = await request.get(`${API}/api/groups/${group.id}`);
+      const current = await res.json();
+      expect(current.children.every((c: any) => c.agentStatus === 'failed')).toBe(true);
+      expect(current.completedAt).toBeTruthy();
+    }).toPass({ timeout: 30_000, intervals: [500] });
+
+    const finalRes = await request.get(`${API}/api/groups/${group.id}`);
+    const final = await finalRes.json();
+    for (const child of final.children) {
+      const eventsRes = await request.get(`${API}/api/tasks/${child.id}/events`);
+      const events = await eventsRes.json();
+      expect(events.some((e: any) => e.type === 'error')).toBe(true);
+    }
+  });
+
   test('GET /api/groups/:id returns 404 for unknown group', async ({ request }) => {
     const res = await request.get(`${API}/api/groups/nonexistent-id`);
     expect(res.status()).toBe(404);
