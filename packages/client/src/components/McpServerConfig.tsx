@@ -6,6 +6,7 @@ import {
 import type { MCPServer, MCPTool, MCPTransportType } from '@/types';
 import { MCP_CREDENTIAL_CLEAR } from '@/types';
 import { api } from '@/lib/api';
+import { McpToolTestDialog } from './McpToolTestDialog';
 
 type TransportOption = { value: MCPTransportType; label: string };
 
@@ -28,6 +29,7 @@ export function McpServerConfig(_props: {
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [tools, setTools] = useState<MCPTool[]>([]);
   const [toolLoading, setToolLoading] = useState(false);
+  const [testingTool, setTestingTool] = useState<MCPTool | null>(null);
   const [permissions, setPermissions] = useState<
     Array<{ serverId: string; agentType: string; toolName: string; allowed: boolean }>
   >([]);
@@ -248,17 +250,9 @@ export function McpServerConfig(_props: {
     }
   }, [loadPermissions]);
 
-  const handleTestTool = useCallback(async (toolName: string) => {
-    if (!selectedServerId) return;
-    setError(null);
-    try {
-      const result = await api.testMcpTool(selectedServerId, toolName);
-      console.log('Tool test result:', result);
-      setError(result.isError ? `Tool returned error: ${JSON.stringify(result.content)}` : 'Tool test succeeded');
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Tool test failed');
-    }
-  }, [selectedServerId]);
+  const openTestDialog = useCallback((tool: MCPTool) => {
+    setTestingTool(tool);
+  }, []);
 
   const statusBadge = (status: string) => {
     const variants: Record<string, string> = {
@@ -458,7 +452,7 @@ export function McpServerConfig(_props: {
                       )}
                     </div>
                     <button
-                      onClick={() => handleTestTool(t.name)}
+                      onClick={() => openTestDialog(t)}
                       className="px-2 py-1 text-xs font-medium rounded-md border text-muted-foreground hover:bg-muted"
                     >
                       Test
@@ -468,6 +462,8 @@ export function McpServerConfig(_props: {
               </div>
             )}
           </div>
+
+          <McpToolTestDialog tool={testingTool} serverId={selectedServerId} onClose={() => setTestingTool(null)} />
 
           {/* Permissions */}
           <div className="rounded-lg border p-4">
